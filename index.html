@@ -2720,6 +2720,49 @@ const SECTORS = [
   'Manufacturing / Industrial AI / Robotics','Product Safety / Annex I regulated products',
   'GPAI / Foundation Models / Downstream Integration','Other / not listed',
 ];
+// ── ANNEX I / ANNEX III REFERENCE DATA ──
+// Factual reference lists used ONLY to capture user-confirmed facts for the P1
+// classification engine (see classifyP1() below). Never used to infer a route
+// from sector alone — sector is a screening signal, not a legal conclusion.
+const ANNEX_I_HARMONISATION_LEGISLATION = [
+  'MDR — Reg. (EU) 2017/745 (medical devices)',
+  'IVDR — Reg. (EU) 2017/746 (in-vitro diagnostic devices)',
+  'Machinery Regulation — Reg. (EU) 2023/1230',
+  'Toy Safety Directive 2009/48/EC',
+  'Recreational Craft Directive 2013/53/EU',
+  'Lifts Directive 2014/33/EU',
+  'ATEX Directive 2014/34/EU (equipment for explosive atmospheres)',
+  'Radio Equipment Directive 2014/53/EU',
+  'Pressure Equipment Directive 2014/68/EU',
+  'Cableway Installations Regulation (EU) 2016/424',
+  'Personal Protective Equipment Regulation (EU) 2016/425',
+  'Gas Appliances Regulation (EU) 2016/426',
+  'Civil Aviation Security Regulation (EU) 2018/1139',
+  'Motor Vehicle Type-Approval Regulation (EU) 2019/2144',
+  'Marine Equipment Directive 2014/90/EU',
+  'Rail Interoperability Directive (EU) 2016/797',
+  'Other Union harmonisation legislation listed in Annex I',
+];
+const ANNEX_III_USE_CASES = [
+  'None of the below — no Annex III match identified',
+  '1(a) — Remote biometric identification systems',
+  '1(b) — Biometric categorisation by sensitive attributes/characteristics',
+  '1(c) — Emotion recognition systems',
+  '2 — Management/operation of critical infrastructure (digital infra, road traffic, water/gas/heating/electricity)',
+  '3(a) — Determining access/admission to education and vocational training',
+  '3(b) — Evaluating learning outcomes / assessing appropriate education level',
+  '3(c) — Monitoring/detecting prohibited behaviour during tests (proctoring)',
+  '4(a) — Recruitment/selection of natural persons (job ads, applications, candidate evaluation)',
+  '4(b) — Decisions on work-relationship terms, promotion, termination, task allocation, performance/behaviour monitoring',
+  '5(a) — Eligibility evaluation for essential public assistance benefits/services',
+  '5(b) — Creditworthiness evaluation / credit scoring',
+  '5(c) — Risk assessment and pricing for life and health insurance',
+  '5(d) — Evaluation/classification of emergency calls / dispatch of emergency services',
+  '6 — Law enforcement risk assessment, polygraph, evidence reliability, profiling, crime analytics',
+  '7 — Migration, asylum and border-control management',
+  '8(a) — Assisting judicial authorities in researching/interpreting/applying the law',
+  '8(b) — Influencing the outcome of an election or referendum / voting behaviour',
+];
 const AI_ACT_SPECIAL_CONTEXTS = [
   'Article 5 — subliminal, manipulative or deceptive techniques','Article 5 — exploitation of vulnerability',
   'Article 5 — social scoring','Article 5 — criminal-risk prediction based solely on profiling/personality traits',
@@ -3761,10 +3804,37 @@ function buildSchema() {
           {id:'crossBorder',type:'bool',label:'Cross-border use?',sub:'Operates across more than one Member State.',legal:'AI Act Art. 70',shared:true},
           {id:'crossBorderCountries',type:'ms',label:'Member States involved',options:C,cond:d=>d.crossBorder,legal:'AI Act Art. 70'},
         ]},
+      { code:'3.5', title:'Prohibited Practice Check (Art. 5)', short:'Art. 5 Check',
+        subtitle:'Article 5(1) contains ten prohibited-practice categories following Regulation (EU) 2026/1744 (Digital Omnibus on AI). Answer every question — a sector or use-case description alone is never sufficient to establish or exclude a prohibited practice.',
+        fields:[
+          {id:'art5Subliminal',type:'bool',label:'(a) Subliminal, manipulative or deceptive techniques',sub:'Materially distorts behaviour causing significant harm, beyond the person\'s awareness or defeating informed decision-making.',legal:'AI Act Art. 5(1)(a)'},
+          {id:'art5Vulnerability',type:'bool',label:'(b) Exploitation of vulnerabilities',sub:'Exploits age, disability or a specific social/economic situation to materially distort behaviour causing significant harm.',legal:'AI Act Art. 5(1)(b)'},
+          {id:'art5NonConsensualIntimate',type:'bool',label:'(ba) Non-consensual intimate/deepfake imagery',sub:'Generates or manipulates realistic non-consensual intimate imagery, audio or video of an identifiable natural person. (Reg. (EU) 2026/1744)',legal:'AI Act Art. 5(1)(ba)'},
+          {id:'art5CSAMGeneration',type:'bool',label:'(bb) Generated/manipulated CSAM',sub:'Generates or manipulates child sexual abuse material, absent a "without right" defence under national law. (Reg. (EU) 2026/1744)',legal:'AI Act Art. 5(1)(bb)'},
+          {id:'art5SocialScoring',type:'bool',label:'(c) Social scoring',sub:'Evaluation/classification of natural persons over time based on social behaviour or predicted characteristics, leading to detrimental/disproportionate treatment.',legal:'AI Act Art. 5(1)(c)'},
+          {id:'art5PredictivePolicing',type:'bool',label:'(d) Predictive criminal-risk profiling',sub:'Risk assessment of a natural person to predict the risk of committing a criminal offence, based solely on profiling or personality-trait assessment.',legal:'AI Act Art. 5(1)(d)'},
+          {id:'art5UntargetedScraping',type:'bool',label:'(e) Untargeted facial-image scraping',sub:'Creates or expands facial-recognition databases through untargeted scraping of facial images from the internet or CCTV.',legal:'AI Act Art. 5(1)(e)'},
+          {id:'art5EmotionWorkEdu',type:'bool',label:'(f) Emotion recognition in workplace/education',sub:'Infers emotions in the workplace or education, outside the narrow medical/safety exceptions.',legal:'AI Act Art. 5(1)(f)'},
+          {id:'art5BiometricCategorisation',type:'bool',label:'(g) Sensitive-attribute biometric categorisation',sub:'Categorises natural persons individually using biometric data to infer race, political opinions, trade-union membership, religion, sex life or sexual orientation.',legal:'AI Act Art. 5(1)(g)'},
+          {id:'art5RealtimeRBI',type:'bool',label:'(h) Real-time remote biometric identification',sub:'Real-time remote biometric identification in publicly accessible spaces for law-enforcement purposes.',legal:'AI Act Art. 5(1)(h)'},
+        ]},
+      { code:'3.6', title:'High-Risk Route Determination', short:'High-Risk Route',
+        subtitle:'Establishes the exact legal route — Annex I product/safety-component route or Annex III use-case route — from confirmed facts. Sector is a screening signal only; it never by itself establishes a route, an Annex III point, or Article 6(3) availability.',
+        fields:[
+          {id:'isSafetyComponent',type:'bool',label:'Product or safety component under Annex I legislation?',sub:'Is the AI system itself a product, or a safety component of a product, covered by the Union harmonisation legislation listed in Annex I?',legal:'AI Act Art. 6(1) & Annex I'},
+          {id:'productLegislation',type:'ms',label:'Applicable Union harmonisation legislation',options:ANNEX_I_HARMONISATION_LEGISLATION,cond:d=>d.isSafetyComponent,legal:'AI Act Annex I'},
+          {id:'thirdPartyConformityAssessment',type:'bool',label:'Third-party conformity assessment required?',sub:'Is the product/safety component required to undergo third-party (notified body) conformity assessment under that legislation?',cond:d=>d.isSafetyComponent,legal:'AI Act Art. 6(1)(b)'},
+          {id:'annexIIIUseCase',type:'dd',label:'Annex III use case (exact point)',required:true,options:ANNEX_III_USE_CASES,legal:'AI Act Art. 6(2) & Annex III'},
+          {id:'art63CondA',type:'bool',label:'Art. 6(3)(a) — does not materially influence the outcome of decision-making',cond:d=>d.annexIIIUseCase&&d.annexIIIUseCase!=='None of the below — no Annex III match identified',legal:'AI Act Art. 6(3)(a)'},
+          {id:'art63CondB',type:'bool',label:'Art. 6(3)(b) — narrow procedural task only',cond:d=>d.annexIIIUseCase&&d.annexIIIUseCase!=='None of the below — no Annex III match identified',legal:'AI Act Art. 6(3)(b)'},
+          {id:'art63CondC',type:'bool',label:'Art. 6(3)(c) — improves a previously completed human assessment, without replacing/influencing it without review',cond:d=>d.annexIIIUseCase&&d.annexIIIUseCase!=='None of the below — no Annex III match identified',legal:'AI Act Art. 6(3)(c)'},
+          {id:'art63CondD',type:'bool',label:'Art. 6(3)(d) — performs a preparatory task only',cond:d=>d.annexIIIUseCase&&d.annexIIIUseCase!=='None of the below — no Annex III match identified',legal:'AI Act Art. 6(3)(d)'},
+          {id:'art63Profiling',type:'bool',label:'Performs profiling of natural persons (Art. 4(4) GDPR)?',sub:'Profiling always defeats the Article 6(3) exception, regardless of the four conditions above.',cond:d=>d.annexIIIUseCase&&d.annexIIIUseCase!=='None of the below — no Annex III match identified',legal:'AI Act Art. 6(3) & GDPR Art. 4(4)'},
+        ]},
     ],
     P2A:[
-      {code:'3.0',title:'P1 Confirmation',short:'P1 Confirmation',subtitle:'Confirm the P1 result that routed this system into the Provider engine.',fields:[
-        {id:'p1Class',type:'dd',required:true,label:'P1 classification result',options:['High-risk — Annex III (no Art. 6(3) exception)','Art. 6(3) exception','Limited risk (Art. 50)','Minimal risk (Art. 95)'],legal:'AI Act Art. 6 & Annex III'},
+      {code:'3.0',title:'P1 Confirmation',short:'P1 Confirmation',subtitle:'Confirm the P1 result that routed this system into the Provider engine. This value is pre-filled from the authoritative P1 result once P1 completes — it is not a re-guess.',fields:[
+        {id:'p1Class',type:'dd',required:true,label:'P1 classification result',options:['High-risk — Annex I (product/safety component)','High-risk — Annex III (no Art. 6(3) exception)','Art. 6(3) exception','Limited risk (Art. 50)','Minimal risk (Art. 95)','Prohibited (Art. 5)','Out of scope (Art. 2)','GPAI route'],legal:'AI Act Art. 6, Annex I & Annex III'},
       ]},
       {code:'3.1',title:'System Metadata',short:'3.1 System Metadata',subtitle:'Identify and describe the high-risk system.',fields:[
         {id:'sysName',type:'text',required:true,label:'System name',placeholder:'e.g. CreditAI v2.3',shared:true,legal:'AI Act Annex IV(1)'},
@@ -4033,17 +4103,422 @@ function pctComplete(){
   if(!req.length)return 100;
   return Math.round(req.filter(f=>filled(f)).length/req.length*100);
 }
+// ═══════════════════════════════════════════════════════════════════════════
+// P1 CLASSIFICATION DATA FLOW — facts / provisional suggestions / authoritative
+// result are strictly separated below. See:
+//   classifyP1()              — the ONLY function permitted to produce an
+//                                authoritative classification (deterministic,
+//                                fact-based, offline, never sector-only).
+//   validateP1Result()        — consistency validator; blocks silent repair.
+//   provisionalClass()        — PRE-completion UI hint only. Always labelled
+//                                provisional. Never persisted as a result.
+//   getAuthoritativeP1Result()— canonical read path for downstream modules.
+//   migrateLegacyClassificationFields() — quarantines old ambiguous fields.
+//   runP1ClassificationIntegrityTests() — in-browser regression self-tests.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const P1_ART5_FACT_KEYS = ['art5Subliminal','art5Vulnerability','art5SocialScoring','art5PredictivePolicing',
+  'art5UntargetedScraping','art5EmotionWorkEdu','art5BiometricCategorisation','art5RealtimeRBI',
+  'art5NonConsensualIntimate','art5CSAMGeneration'];
+
+// Sector is a SCREENING SIGNAL ONLY. It may prompt the provisional UI to say
+// "further checks required" — it must never, on its own, produce a definitive
+// high-risk / Annex I / Annex III conclusion. classifyP1() never reads this list.
+const P1_HIGH_RISK_SCREENING_SECTORS = ['Employment / HR',
+  'Healthcare — Clinical care / healthcare providers','Healthcare — Digital health / clinical decision support',
+  'MedTech — Medical devices','MedTech — In-vitro diagnostic devices',
+  'Finance — Banking / credit / creditworthiness','Finance — Payments / investment / securities / AML',
+  'Insurance — Life / health','Insurance — Motor / property / other',
+  'Education / Vocational Training / EdTech','Public Sector / Government / Administrative Services',
+  'Transport — Vehicles / autonomous and connected mobility','Law Enforcement',
+  'Critical Infrastructure — Electricity / energy systems','Critical Infrastructure — Drinking water',
+  'Critical Infrastructure — Wastewater','Critical Infrastructure — Road transport / traffic management',
+  'Product Safety / Annex I regulated products'];
+
+// ── AUTHORITATIVE P1 CLASSIFICATION ENGINE ──
+// Pure function: (factual profile data) -> structured authoritative result.
+// Deterministic and offline — no model call, no anchoring on any pre-existing
+// classification field. Facts only. See Required Architecture §1-3 of the
+// classification-data-flow specification this engine implements.
+function classifyP1(facts){
+  facts = facts || {};
+  const now = new Date().toISOString();
+  const base = (over)=>Object.assign({
+    status:'completed', classification:null, legalRoute:null,
+    annexIProductLegislation:[], annexIIIReference:null,
+    article63Exception:{considered:false, applicable:false, rationale:null},
+    prohibitedPractice:false, limitedRiskTriggers:[], outOfScope:false,
+    rationale:'', legalBasis:[], confidence:'high',
+    generatedAt:now, source:'P1-deterministic-engine', version:'1.0', validated:true,
+  }, over);
+
+  // 1) Article 2 exemptions — checked first; they remove the system from scope entirely.
+  if(facts.exA||facts.exB||facts.exC||facts.exD){
+    const which = facts.exA?'Art. 2(6)/(8) — scientific research / clinical investigation'
+      : facts.exB?'Art. 2(3) — military/defence/national security'
+      : facts.exC?'Art. 2(10) — personal non-professional use'
+      : 'Art. 2(12) — free and open-source model';
+    return base({classification:'out-of-scope', legalRoute:'article-2-exemption', outOfScope:true,
+      rationale:'System falls outside AI Act scope under '+which+'.', legalBasis:[which]});
+  }
+
+  // 2) Article 5 prohibited practices — checked before any high-risk analysis.
+  const triggeredArt5 = P1_ART5_FACT_KEYS.filter(k=>facts[k]===true);
+  if(triggeredArt5.length){
+    return base({classification:'prohibited', legalRoute:'article-5-prohibited', prohibitedPractice:true,
+      rationale:'One or more Article 5(1) prohibited-practice indicators are present: '+triggeredArt5.join(', ')+'.',
+      legalBasis:['Article 5(1)']});
+  }
+
+  // 3) Annex I product / safety-component route (Article 6(1)).
+  const hasAnnexIFacts = facts.isSafetyComponent!==undefined && facts.isSafetyComponent!==null
+    && facts.thirdPartyConformityAssessment!==undefined && facts.thirdPartyConformityAssessment!==null;
+  if(hasAnnexIFacts && facts.isSafetyComponent===true && facts.thirdPartyConformityAssessment===true
+     && Array.isArray(facts.productLegislation) && facts.productLegislation.length){
+    return base({classification:'high-risk', legalRoute:'article-6-1-annex-i',
+      annexIProductLegislation:facts.productLegislation.slice(),
+      article63Exception:{considered:false, applicable:false, rationale:'Article 6(3) is only available for the Annex III route.'},
+      rationale:'The system is a safety component of, or a product covered by, Union harmonisation legislation requiring third-party conformity assessment ('+facts.productLegislation.join('; ')+').',
+      legalBasis:['Article 6(1)','Annex I']});
+  }
+
+  // 4) Annex III use-case route (Article 6(2)), and its Article 6(3) exception.
+  const annexIIIUseCase = facts.annexIIIUseCase;
+  const annexIIIMatched = annexIIIUseCase && annexIIIUseCase!=='None of the below — no Annex III match identified';
+  if(annexIIIMatched){
+    const condKeys=['art63CondA','art63CondB','art63CondC','art63CondD'];
+    const condsPresent = condKeys.every(k=>facts[k]!==undefined && facts[k]!==null);
+    const allCondsTrue = condKeys.every(k=>facts[k]===true);
+    const profilingDefeats = facts.art63Profiling===true;
+    const exceptionApplicable = condsPresent && allCondsTrue && !profilingDefeats && facts.art63Profiling!==undefined && facts.art63Profiling!==null;
+    if(exceptionApplicable){
+      return base({classification:'non-high-risk', legalRoute:'article-6-3-annex-iii-exception',
+        annexIIIReference:annexIIIUseCase,
+        article63Exception:{considered:true, applicable:true, rationale:'All four Article 6(3) conditions are met and profiling is absent.'},
+        rationale:'The system matches Annex III use case "'+annexIIIUseCase+'" but qualifies for the Article 6(3) exception.',
+        legalBasis:['Article 6(3)','Annex III']});
+    }
+    const exceptionConsidered = condsPresent && facts.art63Profiling!==undefined && facts.art63Profiling!==null;
+    return base({classification:'high-risk', legalRoute:'article-6-2-annex-iii', annexIIIReference:annexIIIUseCase,
+      article63Exception:{considered:exceptionConsidered, applicable:false,
+        rationale: profilingDefeats?'Profiling is present, which defeats the Article 6(3) exception regardless of the four conditions.'
+          : exceptionConsidered?'Not all Article 6(3) conditions are met.':'Article 6(3) conditions not yet fully assessed.'},
+      rationale:'The system matches Annex III use case "'+annexIIIUseCase+'" and does not qualify for the Article 6(3) exception.',
+      legalBasis:['Article 6(2)','Annex III']});
+  }
+
+  // 5) No high-risk route established — Article 50 transparency triggers.
+  const limitedRiskTriggers=[];
+  if(facts.r50Interacts===true) limitedRiskTriggers.push('Art. 50(1) — direct interaction with natural persons');
+  if(facts.r50Emotion===true)   limitedRiskTriggers.push('Art. 50(3) — emotion recognition');
+  if(facts.r50Biometric===true) limitedRiskTriggers.push('Art. 50(3) — biometric categorisation');
+  if(facts.r50Synthetic===true) limitedRiskTriggers.push('Art. 50(4) — synthetic/deepfake content');
+  if(limitedRiskTriggers.length){
+    return base({classification:'limited-risk', legalRoute:'article-50-transparency', limitedRiskTriggers, confidence:'medium',
+      rationale:'No high-risk route applies; one or more Article 50 transparency triggers are present.',
+      legalBasis:['Article 50']});
+  }
+
+  // 6) GPAI route.
+  if(facts.isGpai===true || facts.gpai===true){
+    return base({classification:'gpai', legalRoute:'gpai-route', confidence:'medium',
+      rationale:'The system is, or depends on, a general-purpose AI model — GPAI obligations apply per Art. 51-56 independently of the high-risk analysis above.',
+      legalBasis:['Article 51','Article 53']});
+  }
+
+  // 7) Insufficient facts vs. genuinely no route found — never guess.
+  const missing=[];
+  if(!hasAnnexIFacts) missing.push('Annex I product-route facts (safety-component status, third-party conformity assessment)');
+  if(!annexIIIUseCase) missing.push('Annex III use-case determination');
+  if(missing.length){
+    return base({status:'undetermined', classification:'undetermined', legalRoute:null, confidence:'low', validated:false,
+      rationale:'Insufficient facts to reach an authoritative classification.', requiredChecks:missing});
+  }
+  return base({classification:'minimal-risk', legalRoute:'outside-high-and-limited-risk',
+    rationale:'All classification facts were assessed; no prohibited, high-risk, limited-risk or GPAI route applies.',
+    legalBasis:['Article 95']});
+}
+
+// ── CLASSIFICATION CONSISTENCY VALIDATOR ──
+// Detects contradictions between classification/legalRoute/annexIIIReference/
+// article63Exception/prohibitedPractice. Never silently repairs — callers must
+// mark the result for review and block downstream routing on failure.
+function validateP1Result(result){
+  const errors=[];
+  if(!result || typeof result!=='object') return {valid:false, errors:['Result is not an object.']};
+  const allowedClassifications=['high-risk','non-high-risk','limited-risk','minimal-risk','prohibited','out-of-scope','gpai','undetermined'];
+  const allowedRoutes=['article-6-1-annex-i','article-6-2-annex-iii','article-6-3-annex-iii-exception',
+    'article-5-prohibited','article-2-exemption','article-50-transparency','gpai-route',
+    'outside-high-and-limited-risk', null];
+  if(!allowedClassifications.includes(result.classification)) errors.push('Unknown classification value: '+result.classification);
+  if(!allowedRoutes.includes(result.legalRoute)) errors.push('Unknown legalRoute value: '+result.legalRoute);
+  if(result.legalRoute==='article-6-1-annex-i' && result.annexIIIReference)
+    errors.push('Inconsistent: legalRoute is Annex I (Art. 6(1)) but an Annex III reference is populated.');
+  if((result.legalRoute==='article-6-2-annex-iii'||result.legalRoute==='article-6-3-annex-iii-exception') && !result.annexIIIReference)
+    errors.push('Inconsistent: legalRoute cites Annex III but no annexIIIReference is recorded.');
+  if(result.classification==='non-high-risk' && (result.legalRoute==='article-6-1-annex-i'||result.legalRoute==='article-6-2-annex-iii'))
+    errors.push('Inconsistent: classification is non-high-risk but legalRoute is a high-risk route.');
+  const highRiskRoutes=['article-6-1-annex-i','article-6-2-annex-iii'];
+  if(result.classification==='high-risk' && !highRiskRoutes.includes(result.legalRoute))
+    errors.push('Inconsistent: classification is high-risk but legalRoute ('+result.legalRoute+') is not a recognised high-risk route.');
+  if(result.article63Exception && result.article63Exception.applicable===true && result.classification==='high-risk')
+    errors.push('Inconsistent: Article 6(3) exception is marked applicable but classification is still high-risk.');
+  if(result.prohibitedPractice===true && result.classification!=='prohibited')
+    errors.push('Inconsistent: prohibitedPractice is true but classification is not "prohibited".');
+  if(result.status==='completed' && result.classification==='undetermined')
+    errors.push('Inconsistent: status is completed but classification is undetermined.');
+  return {valid:errors.length===0, errors};
+}
+
+// ── CANONICAL READ PATH — downstream modules must use only this ──
+// Canonical storage: sys.p1ClassificationAssessment.authoritativeResult.
+// NOTE: sys.assessments is a pre-existing ARRAY used elsewhere in this file
+// (Array.isArray checks, .find(), .push()) — it is a different, unrelated
+// concept and must not be repurposed as a keyed object here.
+function getAuthoritativeP1Result(sys){
+  if(!sys) return null;
+  const a = sys.p1ClassificationAssessment && sys.p1ClassificationAssessment.authoritativeResult;
+  return (a && a.validated && a.status==='completed') ? a : null;
+}
+
+// ── LEGACY FIELD QUARANTINE ──
+// Old ambiguous fields (p1Class, riskClassification, riskClass, annexPoint,
+// annexIIIpoint, annexIII, risk) are preserved for audit but never treated as
+// authoritative and never fed back into a new P1 execution as verified fact.
+function migrateLegacyClassificationFields(system){
+  if(!system) return;
+  const d = system.data||{};
+  const legacyKeys = ['p1Class','riskClassification','riskClass','risk','annexPoint','annexIIIpoint','annexIII','legalRoute'];
+  const found = {};
+  legacyKeys.forEach(k=>{ if(d[k]!==undefined && d[k]!==null && d[k]!=='') found[k]=d[k]; });
+  if(Object.keys(found).length){
+    system.legacyClassificationData = Object.assign({}, system.legacyClassificationData, found, {
+      capturedAt:new Date().toISOString(),
+    });
+  }
+  return system.legacyClassificationData||null;
+}
+
+// Suggestion used for imported/uploaded classification values — never wired
+// into a new P1 execution as a verified fact, per the anti-anchoring rule.
+function makeExternalClassification(value, source){
+  return {value:value||null, source:source||'import', verified:false, useAsP1Input:false, capturedAt:new Date().toISOString()};
+}
+
+function authoritativeResultToPreview(auth){
+  const colors={'high-risk':'#E07070','prohibited':'#E07070','non-high-risk':'#3E8E82','limited-risk':'#7BAEFF',
+    'minimal-risk':'#3E8E82','out-of-scope':'#8c8778','gpai':'#7BAEFF','undetermined':'#C9A667'};
+  const labels={'high-risk':auth.legalRoute==='article-6-1-annex-i'?'High-risk — Annex I':'High-risk — Annex III'+(auth.annexIIIReference?' ('+auth.annexIIIReference.split(' — ')[0]+')':''),
+    'prohibited':'Prohibited (Art. 5)', 'non-high-risk':'Non-high-risk — Art. 6(3) exception',
+    'limited-risk':'Limited Risk (Art. 50)', 'minimal-risk':'Minimal Risk', 'out-of-scope':'Out of scope (Art. 2)',
+    'gpai':'GPAI route', 'undetermined':'Undetermined'};
+  return {cls:labels[auth.classification]||auth.classification, col:colors[auth.classification]||'#8c8778',
+    provisional:false, label:'Completed P1 classification result.'};
+}
+
 function provisionalClass(){
   const d=st.data,p=st.pillar;
-  if(p==='P4')return{cls:'Minimal Risk',col:'#3E8E82'};
-  if(p==='P3')return{cls:'Transparency (Art. 50)',col:'#7BAEFF'};
-  const hiRisk=['Employment / HR','Healthcare / MedTech','Finance / Banking / AML','Insurance / InsurTech','Education / EdTech','Transport / Mobility / AV','Justice / Law Enforcement','Public Sector / Government'].some(s=>(d.sector||[]).includes(s));
+  const PROVISIONAL_LABEL='Preliminary screening only — not a P1 classification result.';
+  // Prefer a completed, validated authoritative P1 result when one exists for
+  // the active system — the heuristic below is a pre-completion UX hint only.
+  try{
+    const sys=(st.systems||[]).find(s=>s.id===st.activeId);
+    const auth=getAuthoritativeP1Result(sys);
+    if(auth) return authoritativeResultToPreview(auth);
+  }catch(e){}
+
+  if(p==='P4')return{cls:'Minimal Risk',col:'#3E8E82',provisional:true,label:PROVISIONAL_LABEL};
+  if(p==='P3')return{cls:'Transparency (Art. 50)',col:'#7BAEFF',provisional:true,label:PROVISIONAL_LABEL};
+
   const exempt=d.exA||d.exB||d.exC||d.exD;
-  if(exempt)return{cls:'Exempt (Art. 2)',col:'#8c8778'};
-  if(hiRisk)return{cls:'High-risk — Annex III',col:'#E07070'};
-  if(d.r50Interacts||d.r50Emotion||d.r50Synthetic)return{cls:'Limited Risk (Art. 50)',col:'#7BAEFF'};
-  return{cls:'Minimal Risk (provisional)',col:'#3E8E82'};
+  if(exempt)return{cls:'Exempt (Art. 2) — provisional',col:'#8c8778',provisional:true,label:PROVISIONAL_LABEL};
+
+  if(P1_ART5_FACT_KEYS.some(k=>d[k]===true))
+    return{cls:'Potential prohibited practice — provisional',col:'#E07070',provisional:true,label:PROVISIONAL_LABEL+' Article 5 requires full review.'};
+
+  const hasAnnexIIIFact = !!d.annexIIIUseCase && d.annexIIIUseCase!=='None of the below — no Annex III match identified';
+  if(hasAnnexIIIFact)
+    return{cls:'Potential high-risk — Annex III ('+d.annexIIIUseCase.split(' — ')[0]+') — provisional',col:'#E07070',provisional:true,label:PROVISIONAL_LABEL};
+
+  if(d.isSafetyComponent===true)
+    return{cls:'Potential high-risk — Annex I route — provisional',col:'#E07070',provisional:true,label:PROVISIONAL_LABEL};
+
+  const sectorFlag = P1_HIGH_RISK_SCREENING_SECTORS.some(s=>(d.sector||[]).includes(s));
+  const hasAnnexIFacts = d.isSafetyComponent!==undefined && d.isSafetyComponent!==null;
+  if(sectorFlag && !hasAnnexIFacts && !hasAnnexIIIFact)
+    return{cls:'Undetermined — sector suggests further checks may be needed',col:'#C9A667',provisional:true,label:PROVISIONAL_LABEL,
+      requiredChecks:['Annex I product route','Annex III use case','Article 6(3) exception']};
+
+  if(d.r50Interacts||d.r50Emotion||d.r50Synthetic)
+    return{cls:'Potential limited risk (Art. 50) — provisional',col:'#7BAEFF',provisional:true,label:PROVISIONAL_LABEL};
+
+  return{cls:'Undetermined — provisional',col:'#8c8778',provisional:true,label:PROVISIONAL_LABEL};
 }
+
+// Legacy-mirror lookup tables — module-level so both execComplete() and
+// runP1ClassificationIntegrityTests() use the identical mapping.
+const P1_RISK_MIRROR = {
+  'high-risk':'High-risk', 'prohibited':'Prohibited', 'non-high-risk':'Non-high-risk',
+  'limited-risk':'Limited', 'minimal-risk':'Minimal', 'out-of-scope':'Exempt', 'gpai':'GPAI',
+};
+const P1_CLASS_MIRROR = {
+  'article-6-1-annex-i':'High-risk — Annex I (product/safety component)',
+  'article-6-2-annex-iii':'High-risk — Annex III (no Art. 6(3) exception)',
+  'article-6-3-annex-iii-exception':'Art. 6(3) exception',
+  'article-5-prohibited':'Prohibited (Art. 5)',
+  'article-2-exemption':'Out of scope (Art. 2)',
+  'article-50-transparency':'Limited risk (Art. 50)',
+  'gpai-route':'GPAI route',
+  'outside-high-and-limited-risk':'Minimal risk (Art. 95)',
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// P1 CLASSIFICATION INTEGRITY SELF-TESTS
+// In-browser regression suite. Exercises classifyP1(), validateP1Result(),
+// getAuthoritativeP1Result(), provisionalClass() and getRoutingRows() against
+// synthetic facts only — no hardcoded organisation, sector, country, provider,
+// deployer, medical device or Annex III point is asserted as "the" answer;
+// each case is a minimal, generic fact pattern chosen only to exercise one
+// architectural rule. Global state (st.data/st.pillar/st.activeId/st.systems)
+// is saved and restored so the suite never mutates the live workspace.
+// Call from the console: runP1ClassificationIntegrityTests()
+// ═══════════════════════════════════════════════════════════════════════════
+function runP1ClassificationIntegrityTests(){
+  const results=[];
+  const check=(name,cond,detail)=>results.push({name,pass:!!cond,detail:detail||''});
+
+  const savedData=st.data, savedPillar=st.pillar, savedActiveId=st.activeId, savedSystems=st.systems;
+  try{
+    // Isolated synthetic workspace for the tests that need st.* (provisionalClass,
+    // getRoutingRows, buildClassificationControlRecord all read active-system state).
+    const synthSys={id:'__test_sys__', name:'Integrity-test system', data:{}, p1ClassificationAssessment:undefined};
+    st.systems=[synthSys];
+    st.activeId=synthSys.id;
+    st.pillar='P1';
+    st.data=synthSys.data;
+
+    // 1) A sector alone does not produce a final Annex III classification.
+    {
+      const r=classifyP1({sector:['Employment / HR'], exE:true});
+      check('1. Sector alone never yields a final Annex III classification',
+        r.legalRoute!=='article-6-2-annex-iii' && (r.status==='undetermined'||r.classification!=='high-risk'),
+        'got classification='+r.classification+' legalRoute='+r.legalRoute);
+    }
+
+    // 2) A potential Annex I product case is not automatically mapped to Annex III.
+    {
+      const r=classifyP1({exE:true, isSafetyComponent:true, thirdPartyConformityAssessment:true,
+        productLegislation:['MDR — Reg. (EU) 2017/745 (medical devices)']});
+      check('2. Confirmed Annex I facts route to Article 6(1)/Annex I, not Annex III',
+        r.legalRoute==='article-6-1-annex-i' && r.annexIIIReference===null,
+        'got legalRoute='+r.legalRoute+' annexIIIReference='+r.annexIIIReference);
+    }
+
+    // 3) An imported p1Class does not enter a new P1 prompt as a verified fact.
+    {
+      synthSys.data.p1Class='High-risk — Annex III (no Art. 6(3) exception)';
+      synthSys.legacyClassificationData={p1Class:synthSys.data.p1Class, source:'import', capturedAt:new Date().toISOString()};
+      const rec=JSON.parse(buildClassificationControlRecord('P1'));
+      check('3. Imported/legacy p1Class is not inserted into the P1 prompt as a verified fact',
+        rec.status==='TO_BE_DETERMINED_BY_P1' && rec.priorClassification===null && !('p1Result' in rec) && !('annexPoint' in rec)
+        && (!rec.externalClassification || rec.externalClassification.useAsP1Input===false),
+        'record.status='+rec.status+' has p1Result key='+('p1Result' in rec));
+      delete synthSys.data.p1Class; delete synthSys.legacyClassificationData;
+    }
+
+    // 4) A provisional suggestion does not unlock downstream modules.
+    {
+      synthSys.data={sector:['Healthcare — Clinical care / healthcare providers']};
+      st.data=synthSys.data;
+      const rows=getRoutingRows();
+      const anyOn=rows.some(r=>r.on===true);
+      check('4. No authoritative result yet -> provisional screening does not unlock any downstream engine',
+        !anyOn, 'routing rows='+JSON.stringify(rows));
+    }
+
+    // 5) A completed Annex I result remains Annex I after post-processing (legacy mirror).
+    {
+      const r=classifyP1({exE:true, isSafetyComponent:true, thirdPartyConformityAssessment:true,
+        productLegislation:['Machinery Regulation — Reg. (EU) 2023/1230']});
+      const mirrored=P1_CLASS_MIRROR[r.legalRoute];
+      check('5. Legacy-mirror post-processing keeps an Annex I result as Annex I (not remapped to Annex III)',
+        mirrored==='High-risk — Annex I (product/safety component)',
+        'mirrored p1Class='+mirrored);
+    }
+
+    // 6) A completed Annex III result retains its exact Annex III point.
+    {
+      const point='6 — Law enforcement risk assessment, polygraph, evidence reliability, profiling, crime analytics';
+      const r=classifyP1({exE:true, annexIIIUseCase:point, art63CondA:false, art63CondB:false, art63CondC:false, art63CondD:false, art63Profiling:true});
+      check('6. Completed Annex III result retains its exact Annex III point',
+        r.legalRoute==='article-6-2-annex-iii' && r.annexIIIReference===point,
+        'annexIIIReference='+r.annexIIIReference);
+    }
+
+    // 7) Contradictory result structures fail validation.
+    {
+      const bad1=validateP1Result({status:'completed',classification:'high-risk',legalRoute:'article-6-1-annex-i',
+        annexIIIReference:'Annex III point 5',article63Exception:{applicable:false},prohibitedPractice:false});
+      const bad2=validateP1Result({status:'completed',classification:'non-high-risk',legalRoute:'article-6-1-annex-i',
+        annexIIIReference:null,article63Exception:{applicable:false},prohibitedPractice:false});
+      const bad3=validateP1Result({status:'completed',classification:'high-risk',legalRoute:'article-6-2-annex-iii',
+        annexIIIReference:null,article63Exception:{applicable:false},prohibitedPractice:false});
+      const bad4=validateP1Result({status:'completed',classification:'high-risk',legalRoute:'article-6-2-annex-iii',
+        annexIIIReference:'x',article63Exception:{applicable:true},prohibitedPractice:false});
+      check('7. Contradictory result structures fail validation (4/4 cases)',
+        !bad1.valid && !bad2.valid && !bad3.valid && !bad4.valid,
+        'valid flags='+[bad1.valid,bad2.valid,bad3.valid,bad4.valid].join(','));
+    }
+
+    // 8) Re-running the classifier never reuses/carries over a prior result — it
+    // is a pure function of the facts passed to it on each call.
+    {
+      const r1=classifyP1({exE:true, isSafetyComponent:true, thirdPartyConformityAssessment:true, productLegislation:['IVDR — Reg. (EU) 2017/746 (in-vitro diagnostic devices)']});
+      const r2=classifyP1({exE:true, annexIIIUseCase:'2 — Management/operation of critical infrastructure (digital infra, road traffic, water/gas/heating/electricity)'});
+      check('8. Re-running the classifier with different facts never carries over the previous result',
+        r1.legalRoute==='article-6-1-annex-i' && r2.legalRoute==='article-6-2-annex-iii' && r1.legalRoute!==r2.legalRoute,
+        'r1.legalRoute='+r1.legalRoute+' r2.legalRoute='+r2.legalRoute);
+    }
+
+    // 9) Imported test data does not count as a completed assessment.
+    {
+      synthSys.data={}; synthSys.risk='High-risk'; synthSys.data.p1Class='High-risk — Annex III (no Art. 6(3) exception)';
+      synthSys.legacyClassificationData={p1Class:synthSys.data.p1Class, source:'import'};
+      delete synthSys.p1ClassificationAssessment;
+      check('9. An imported classification (no authoritativeResult saved) does not count as a completed assessment',
+        getAuthoritativeP1Result(synthSys)===null,
+        'getAuthoritativeP1Result='+JSON.stringify(getAuthoritativeP1Result(synthSys)));
+    }
+
+    // 10) Downstream routing reads only the canonical authoritative P1 result,
+    // never sys.risk / sys.data.p1Class directly.
+    {
+      synthSys.data={p1Class:'High-risk — Annex III (no Art. 6(3) exception)'};
+      synthSys.risk='High-risk';
+      delete synthSys.p1ClassificationAssessment;
+      const beforeAuth=getAuthoritativeP1Result(synthSys);
+      synthSys.p1ClassificationAssessment={authoritativeResult:Object.assign(classifyP1({exE:true, annexIIIUseCase:'1(a) — Remote biometric identification systems'}),{})};
+      const afterAuth=getAuthoritativeP1Result(synthSys);
+      check('10. Downstream read path ignores legacy sys.risk/data.p1Class and reads only the canonical authoritative result',
+        beforeAuth===null && afterAuth!==null && afterAuth.legalRoute==='article-6-2-annex-iii',
+        'beforeAuth='+JSON.stringify(beforeAuth)+' afterAuth.legalRoute='+(afterAuth&&afterAuth.legalRoute));
+    }
+
+  } finally {
+    st.data=savedData; st.pillar=savedPillar; st.activeId=savedActiveId; st.systems=savedSystems;
+  }
+
+  const passCount=results.filter(r=>r.pass).length;
+  const report={
+    suite:'P1 Classification Integrity Tests', ranAt:new Date().toISOString(),
+    total:results.length, passed:passCount, failed:results.length-passCount,
+    allPassed:passCount===results.length, results,
+  };
+  try{ console.table(results.map(r=>({name:r.name,pass:r.pass,detail:r.detail}))); }catch(e){}
+  return report;
+}
+try{ window.runP1ClassificationIntegrityTests = runP1ClassificationIntegrityTests; }catch(e){}
+
 // ── OVERLAY-AWARE OUTPUT DOCS ──
 // Returns base output catalogue + dynamically generated overlay doc entries
 function getOutputDocs(){
@@ -4063,13 +4538,25 @@ function getOutputDocs(){
 function getRoutingRows(){
   const p=st.pillar,d=st.data;
   if(p==='P1'){
-    const pc=provisionalClass();
-    const isHigh=pc.cls.includes('High');
+    // Routed-engine indicators use the authoritative result when one exists
+    // (system.p1ClassificationAssessment.authoritativeResult); otherwise every
+    // engine is shown as undetermined rather than guessed from sector or provisional text.
+    const sys=(st.systems||[]).find(s=>s.id===st.activeId);
+    const auth=getAuthoritativeP1Result(sys);
+    if(auth){
+      const isHigh = auth.classification==='high-risk';
+      return[
+        {code:'P2A',label:'Provider engine (high-risk)',on:isHigh},
+        {code:'P2B',label:'Deployer engine (high-risk)',on:isHigh},
+        {code:'P3', label:'Transparency engine (Art. 50)',on:auth.classification==='limited-risk'||!!d.r50Interacts||!!d.r50Emotion||!!d.r50Synthetic},
+        {code:'P4', label:'Minimal-risk engine',on:!isHigh},
+      ];
+    }
     return[
-      {code:'P2A',label:'Provider engine (high-risk)',on:isHigh},
-      {code:'P2B',label:'Deployer engine (high-risk)',on:isHigh},
-      {code:'P3', label:'Transparency engine (Art. 50)',on:!!d.r50Interacts||!!d.r50Emotion||!!d.r50Synthetic},
-      {code:'P4', label:'Minimal-risk engine',on:!isHigh},
+      {code:'P2A',label:'Provider engine (high-risk) — undetermined until P1 completes',on:false},
+      {code:'P2B',label:'Deployer engine (high-risk) — undetermined until P1 completes',on:false},
+      {code:'P3', label:'Transparency engine (Art. 50) — undetermined until P1 completes',on:false},
+      {code:'P4', label:'Minimal-risk engine — undetermined until P1 completes',on:false},
     ];
   }
   if(p==='P2A')return[{code:'O01–O31',label:'Full provider documentation suite',on:true},{code:'P2B',label:'Deployer handover (Output 28)',on:true}];
@@ -4351,9 +4838,11 @@ function renderPreview(){
       <div class="preview-pct-bar-track"><div class="preview-pct-bar-fill" style="width:${pct}%"></div></div>
       <div class="preview-pct-num">${pct}%</div>
     </div>
-    <div class="preview-class-card">
-      <div class="preview-class-label">Provisional classification</div>
-      <div class="preview-class-value" style="color:${pc.col};">${pc.cls}</div>
+    <div class="preview-class-card" style="border:${pc.provisional===false?'1px solid var(--green)':'1px dashed '+pc.col};">
+      <div class="preview-class-label">${pc.provisional===false?'P1 CLASSIFICATION RESULT — COMPLETED':'PROVISIONAL CLASSIFICATION'}</div>
+      <div class="preview-class-value" style="color:${pc.col};">${esc(pc.cls)}</div>
+      <div class="preview-class-caveat" style="font-size:10px;color:var(--muted);margin-top:4px;">${esc(pc.label||'')}</div>
+      ${pc.requiredChecks&&pc.requiredChecks.length?`<div class="preview-class-checks" style="font-size:10px;color:var(--amber);margin-top:6px;">Required checks: ${pc.requiredChecks.map(esc).join(' · ')}</div>`:''}
     </div>
     <div class="preview-route-label">Routed engines</div>
     <div class="preview-route-rows">
@@ -4586,9 +5075,10 @@ function openRunModal(){
           <div class="modal-summary-item"><div class="key">Outputs</div><div class="val">${getOutputDocs().length} docs${(()=>{const ov=[].concat(st.data.combinedOverlays||[],st.data.natOverlays||[],st.data.secOverlays||[]).filter(Boolean);return ov.length?` (incl. ${ov.length} overlay${ov.length>1?'s':''})`:'';})()}</div></div>
         </div>
         <div class="modal-class-row">
-          <span class="modal-class-label">Provisional classification</span>
-          <span class="modal-class-value" style="color:${pc.col};">${pc.cls}</span>
+          <span class="modal-class-label">${pc.provisional===false?'P1 classification result — completed':'Provisional classification'}</span>
+          <span class="modal-class-value" style="color:${pc.col};">${esc(pc.cls)}</span>
         </div>
+        <div style="font-size:10px;color:var(--muted);margin:-8px 0 8px;">${esc(pc.label||'')}</div>
         <div class="run-summary-title">Routing</div><div class="modal-route-label">Routed engines</div>
         <div class="modal-route-rows">
           ${routing.map(r=>`<div class="modal-route-row">
@@ -6548,6 +7038,7 @@ async function validateOutputRegistry(pillar){
 
 function buildClassificationControlRecord(pillar){
   const d=getExecutionInputData()||{};
+  const sys=(st.systems||[]).find(s=>s.id===st.activeId);
   const value=(...keys)=>{
     for(const k of keys){
       const v=d[k];
@@ -6560,14 +7051,58 @@ function buildClassificationControlRecord(pillar){
   const art5={
     subliminal:value('art5Subliminal'), vulnerability:value('art5Vulnerability'),
     socialScoring:value('art5SocialScoring'), predictivePolicing:value('art5PredictivePolicing'),
-    realtimeRBI:value('art5RealtimeRBI'),
-    nonConsensualIntimate:value('art5NonConsensualIntimate'), csamGeneration:value('art5CSAMGeneration')
+    untargetedScraping:value('art5UntargetedScraping'), emotionWorkEdu:value('art5EmotionWorkEdu'),
+    biometricCategorisation:value('art5BiometricCategorisation'), realtimeRBI:value('art5RealtimeRBI'),
+    nonConsensualIntimate:value('art5NonConsensualIntimate'), csamGeneration:value('art5CSAMGeneration'),
   };
+  const annexIFacts={
+    isSafetyComponent:value('isSafetyComponent'), productLegislation:value('productLegislation'),
+    thirdPartyConformityAssessment:value('thirdPartyConformityAssessment'),
+  };
+  const annexIIIFacts={
+    annexIIIUseCase:value('annexIIIUseCase'),
+    art63CondA:value('art63CondA'), art63CondB:value('art63CondB'),
+    art63CondC:value('art63CondC'), art63CondD:value('art63CondD'), art63Profiling:value('art63Profiling'),
+  };
+
+  if(pillar==='P1'){
+    // ANTI-ANCHORING (Required Architecture §4): a new P1 execution must never
+    // receive a pre-existing classification field (p1Class, riskClassification,
+    // riskClass, risk, annexPoint, annexIIIpoint, annexIII, legalRoute) as a
+    // verified fact. Only raw, user-confirmed facts are passed below; any
+    // quarantined legacy/imported value is surfaced separately, explicitly
+    // flagged as unverified and not usable as P1 input.
+    const record={
+      status:'TO_BE_DETERMINED_BY_P1',
+      priorClassification:null,
+      instruction:'Independently determine the applicable EU AI Act classification route from the factual inputs below. Do not adopt imported, cached, provisional, user-labelled, or previously suggested classifications unless independently supported by the facts and legal analysis.',
+      providerRole:value('primaryActorRole','providerRole'),
+      deployerRole:value('deployerType','deployerRole'),
+      sector:value('sector'),
+      intendedPurpose:value('intendedPurpose'),
+      deploymentCountries:value('countryDeploy','deploymentCountries','memberStates'),
+      exemptionFacts:{exA:value('exA'),exB:value('exB'),exC:value('exC'),exD:value('exD'),exE:value('exE')},
+      prohibitedPracticeInputs:art5,
+      annexIFacts:annexIFacts,
+      annexIIIFacts:annexIIIFacts,
+      transparencyTriggers:{interaction:value('r50Interacts'),emotion:value('r50Emotion'),biometric:value('r50Biometric'),synthetic:value('r50Synthetic')},
+      personalData:value('personalData'),
+      specialCategories:value('specialCategories'),
+      gpaiDependency:value('gpai','gpaiDependency','isGpaiModel'),
+      externalClassification: (sys && sys.legacyClassificationData) ? Object.assign({}, sys.legacyClassificationData, {useAsP1Input:false}) : null,
+      note:'externalClassification (if present) reflects legacy/imported data quarantined for audit only. It is NOT a verified fact for this P1 run and must not anchor the classification.',
+    };
+    return JSON.stringify(record,null,2);
+  }
+
+  // Downstream pillars (P2A/P2B/P3/P4): read ONLY the canonical authoritative
+  // P1 result (Required Architecture §11). No ambiguous fallback across
+  // differently-named legacy fields — those have different semantic meanings
+  // and are never interchangeable authoritative sources.
+  const auth = getAuthoritativeP1Result(sys);
   const record={
-    status: pillar==='P1' ? 'TO BE DETERMINED BY THE FULL P1 CLASSIFICATION METHOD' : 'LOCKED INPUT — DO NOT RECLASSIFY OR SUBSTITUTE AN ANNEX POINT',
-    p1Result:value('p1Class','riskClassification','riskClass','risk'),
-    annexPoint:value('annexPoint','annexIIIpoint','annexIII'),
-    article6Exception:value('art6Exception','article6Exception','significantRiskException'),
+    status: auth ? 'LOCKED INPUT — DO NOT RECLASSIFY OR SUBSTITUTE AN ANNEX POINT' : 'NO VALIDATED P1 RESULT AVAILABLE — DO NOT INVENT ONE',
+    authoritativeP1Result: auth || null,
     providerRole:value('primaryActorRole','providerRole'),
     deployerRole:value('deployerType','deployerRole'),
     sector:value('sector'),
@@ -6578,9 +7113,6 @@ function buildClassificationControlRecord(pillar){
     personalData:value('personalData'),
     specialCategories:value('specialCategories'),
     gpaiDependency:value('gpai','gpaiDependency','isGpaiModel'),
-    classificationBasis:value('moduleAccessBasis','classificationBasisStatus'),
-    classificationBasisReference:value('classificationBasisReference'),
-    classificationBasisReason:value('classificationBasisReason')
   };
   return JSON.stringify(record,null,2);
 }
@@ -9725,7 +10257,15 @@ function confirmModuleAccess(sysId,pillar,p1Done){
   if(!p1Done){var cb=document.getElementById('module-access-confirm'); if(!cb||!cb.checked){showToast('Confirm the classification basis before proceeding.','var(--status-review)');return;}}
   var rs=document.getElementById('module-access-reason'), rf=document.getElementById('module-access-reference'), nt=document.getElementById('module-access-note');
   var reasonCode=rs?rs.value:'other', reason=rs&&rs.options[rs.selectedIndex]?rs.options[rs.selectedIndex].text:reasonCode, reference=rf?rf.value.trim():'', note=nt?nt.value.trim():'';
-  var basis={mode:p1Done?'p1-anchored':'user-confirmed',pillar:pillar,reasonCode:reasonCode,reason:reason,reference:reference,note:note,confirmedAt:new Date().toISOString(),p1ExecutionPresent:!!p1Done,riskClassification:sys.risk||((sys.data||{}).p1Class)||((sys.data||{}).riskClassification)||'[NOT PROVIDED]',annexPoint:((sys.data||{}).annexPoint)||((sys.profile||{}).annexPoint)||'[NOT PROVIDED]',actorRole:((sys.data||{}).primaryActorRole)||((sys.profile||{}).primaryActorRole)||'[NOT PROVIDED]'};
+  // Read the canonical authoritative result only — no fallback across
+  // differently-named legacy fields (sys.risk / data.p1Class / data.riskClassification
+  // have different semantic meanings and are never interchangeable sources).
+  var _authForBasis=getAuthoritativeP1Result(sys);
+  var basis={mode:p1Done?'p1-anchored':'user-confirmed',pillar:pillar,reasonCode:reasonCode,reason:reason,reference:reference,note:note,confirmedAt:new Date().toISOString(),p1ExecutionPresent:!!p1Done,
+    authoritativeP1Result:_authForBasis||null,
+    riskClassification:_authForBasis?_authForBasis.classification:'[NO VALIDATED P1 RESULT]',
+    annexPoint:_authForBasis?(_authForBasis.annexIIIReference||(_authForBasis.annexIProductLegislation&&_authForBasis.annexIProductLegislation.length?_authForBasis.annexIProductLegislation.join('; '):null)||'[NOT APPLICABLE — route: '+_authForBasis.legalRoute+']'):'[NOT PROVIDED]',
+    actorRole:((sys.data||{}).primaryActorRole)||((sys.profile||{}).primaryActorRole)||'[NOT PROVIDED]'};
   sys.moduleAccess=sys.moduleAccess||{}; sys.moduleAccess[pillar]=basis; sys.data=sys.data||{}; sys.data.moduleAccessBasis=basis; sys.data.classificationBasisStatus=basis.mode; sys.data.classificationBasisReference=reference||'[NOT PROVIDED]'; sys.data.classificationBasisReason=reason;
   addAuditRecord(sys,'assessment',p1Done?'Module launch using P1 anchor':'Manual classification basis confirmed',ENGINE_LABELS[pillar]||pillar,sys.pillar,pillar,reason+(reference?' · '+reference:'')+(note?' · '+note:''),null);
   saveSystems(); closeModuleAccessDialog(); swLaunchEngine(pillar,sysId);
@@ -11004,38 +11544,63 @@ async function execComplete(){
 
     // Auto-inherit P1 outputs into st.data for downstream pillars
     if(exec.pillar==='P1'){
-      // Store P1 classification results for P2A/P2B/P3/P4 to inherit
+      // The generated narrative documents (O13 risk-classification summary,
+      // O14 routing decision) remain human-readable evidence — they are NOT
+      // parsed for the authoritative result. Structured classification is
+      // computed independently below by the deterministic engine, from the
+      // same factual inputs the documents were generated from.
       const p1Result = doneOutputs.find(o=>o.code==='O13'||o.code==='O14');
       if(p1Result){
         _sys.data.p1ClassResult  = p1Result.content?p1Result.content.slice(0,200):'';
         _sys.data.p1RunRef       = 'P1-'+new Date().toISOString().slice(0,10)+'-'+_sys.id.slice(-4).toUpperCase();
         _sys.data.p1Completed    = new Date().toISOString();
       }
-      // Compute and persist the actual risk classification — provisionalClass()
-      // already correctly derives this from the profile answers, but its
-      // result was never being written onto the system record anywhere in
-      // the codebase, so sys.risk stayed permanently undefined after every
-      // P1 run. This is the real reason every risk badge across the app
-      // (and the P2A 'P1 Confirmation' pre-fill below) never populated.
-      try{
-        const pc = provisionalClass();
-        const normalizedRisk =
-          pc.cls.includes('High') ? 'High-risk' :
-          pc.cls.includes('Limited') ? 'Limited' :
-          pc.cls.includes('Exempt') ? 'Exempt' :
-          pc.cls.includes('Minimal') ? 'Minimal' : 'Unknown';
-        _sys.risk = normalizedRisk;
-      }catch(e){}
-      // Pre-fill the actual 'P1 Confirmation' dropdown (P2A step 3.0, field
-      // id 'p1Class') that the raw classification result above never
-      // reached — previously left blank, forcing the user to re-guess and
-      // manually re-select what P1 had already determined.
-      const riskToP1Class = {
-        'High-risk': 'High-risk — Annex III (no Art. 6(3) exception)',
-        'Limited':   'Limited risk (Art. 50)',
-        'Minimal':   'Minimal risk (Art. 95)',
-      };
-      if(riskToP1Class[_sys.risk]) _sys.data.p1Class = riskToP1Class[_sys.risk];
+
+      // Quarantine any pre-existing legacy/ambiguous classification fields
+      // (p1Class, riskClassification, riskClass, risk, annexPoint, ...) for
+      // audit BEFORE this run's authoritative result is computed and saved —
+      // they must never be read back into classifyP1() as facts.
+      try{ migrateLegacyClassificationFields(_sys); }catch(e){}
+      // data.p1Class is a DERIVED mirror only from this point on (never an
+      // authoritative source — see getAuthoritativeP1Result()). Clear it before
+      // recomputation so a stale pre-fix value can never survive display as if
+      // it were still current; it is re-set below only if this run validates.
+      if(_sys.data) delete _sys.data.p1Class;
+
+      // Compute the authoritative classification from facts only (never from
+      // sector alone, never from provisionalClass(), never from prior runs
+      // unless this is an explicit reassessment — see reassessment note below).
+      const rawResult = classifyP1(_sys.data||{});
+      const validation = validateP1Result(rawResult);
+
+      if(!_sys.p1ClassificationAssessment) _sys.p1ClassificationAssessment = {history:[]};
+      const assessment = _sys.p1ClassificationAssessment;
+      if(!Array.isArray(assessment.history)) assessment.history = [];
+
+      if(validation.valid && rawResult.status==='completed'){
+        assessment.authoritativeResult = rawResult;
+        assessment.needsReview = false;
+        assessment.reviewErrors = [];
+        assessment.history.push({result:rawResult, savedAt:new Date().toISOString()});
+
+        // Legacy mirrors — DERIVED from the validated authoritative result,
+        // never the other way around. Kept only for backward-compatible UI
+        // badges elsewhere in the app that still read sys.risk / data.p1Class.
+        // (Mapping tables are module-level constants — see P1_RISK_MIRROR /
+        // P1_CLASS_MIRROR — so runP1ClassificationIntegrityTests() exercises
+        // the exact same tables this code path uses, not a duplicate copy.)
+        _sys.risk = P1_RISK_MIRROR[rawResult.classification] || 'Unknown';
+        if(P1_CLASS_MIRROR[rawResult.legalRoute]) _sys.data.p1Class = P1_CLASS_MIRROR[rawResult.legalRoute];
+      } else {
+        // Undetermined or inconsistent — mark for review and do NOT write a
+        // guessed value into sys.risk / data.p1Class. Downstream routing
+        // (getAuthoritativeP1Result) will correctly see "no authoritative
+        // result yet" until this is resolved.
+        assessment.needsReview = true;
+        assessment.reviewErrors = validation.valid ? (rawResult.requiredChecks||['Classification undetermined — insufficient facts.']) : validation.errors;
+        assessment.lastAttempt = rawResult;
+        assessment.history.push({result:rawResult, savedAt:new Date().toISOString(), blocked:true, errors:assessment.reviewErrors});
+      }
     }
 
     // Audit record
