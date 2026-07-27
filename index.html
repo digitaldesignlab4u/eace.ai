@@ -3608,7 +3608,7 @@ const OUTPUTS = {
     {code:'O12',title:'Post-deployment monitoring plan',article:'AI Act Art. 72',cat:'Lifecycle',pages:10},
     {code:'O13',title:'NIS2 deployer obligations record',article:'NIS2 Dir. 2022/2555',cat:'Security',pages:8},
     {code:'O14',title:'DORA financial-sector obligations record (conditional)',article:'DORA Reg. 2022/2554',cat:'Security',pages:8},
-    {code:'O15',title:'Fairness monitoring and bias audit record',article:'AI Act Art. 9(7) & Art. 26',cat:'Fairness',pages:10},
+    {code:'O15',title:'Fairness monitoring and bias audit record',article:'AI Act Art. 9(7) & Art. 26 (+ Art. 4a where special-category data is processed for bias detection/correction)',cat:'Fairness',pages:10},
     {code:'O16',title:'GDPR controller compliance package',article:'GDPR Arts. 5, 6, 13, 24',cat:'Data',pages:14},
     {code:'O17',title:'Decommissioning and data-deletion plan',article:'AI Act Art. 26 & GDPR Art. 5(1)(e)',cat:'Lifecycle',pages:6},
     {code:'O18',title:'Contractual instrument package — deployer side',article:'AI Act Art. 25',cat:'Legal',pages:14},
@@ -3795,7 +3795,7 @@ function buildSchema() {
         {id:'dataSources',type:'tags',label:'Training data sources',legal:'AI Act Art. 10'},
         {id:'dataVolume',type:'text',label:'Training data volume',placeholder:'e.g. 1.2 million records · 847 GB',legal:'AI Act Annex IV'},
         {id:'personalDataTraining',type:'bool',label:'Personal data in training?',sub:'Personal data used to train or validate the model.',note:true,notePh:'e.g. financial history, employment records',legal:'GDPR Art. 6 & AI Act Art. 10'},
-        {id:'biasMitigation',type:'textarea',label:'Bias mitigation measures',legal:'AI Act Art. 10(2)(f)-(g)'},
+        {id:'biasMitigation',type:'textarea',label:'Bias mitigation measures',legal:'AI Act Art. 10(2)(f)-(g); Art. 4a where special-category data is processed strictly for bias detection/correction'},
         {id:'knownLimitations',type:'textarea',label:'Known limitations',legal:'AI Act Art. 13 & Art. 15'},
       ]},
       {code:'3.5',title:'Conformity & Quality',short:'3.5 Conformity',subtitle:'QMS, risk-management methodology and conformity pathway.',fields:[
@@ -14776,7 +14776,7 @@ const OUTPUT_SPECIFICATIONS = Object.freeze({
     { code:'28', title:'TRAINING', legalBasis:'Art. 26+14  ·  D-EID: D-EID-028  ·  P2A Bridge: P-EID-007+008', mandatorySections:5, subDocuments:0, contractualInstruments:0 },
     { code:'29', title:'DEPLOYER CHANGE MANAGEMENT', legalBasis:'Art. 26+9  ·  D-EID: D-EID-029  ·  P2A Bridge: P-EID-003+015', mandatorySections:6, subDocuments:0, contractualInstruments:0 },
     { code:'30', title:'DEPLOYER DECOMMISSIONING PROCEDURE', legalBasis:'Art. 26+72  ·  D-EID: D-EID-030  ·  P2A Bridge: P-EID-017+018', mandatorySections:7, subDocuments:0, contractualInstruments:0 },
-    { code:'31', title:'FAIRNESS MONITORING PLAN', legalBasis:'Art. 9+10+26  ·  D-EID: D-EID-031  ·  P2A Bridge: P-EID-023', mandatorySections:6, subDocuments:0, contractualInstruments:0 },
+    { code:'31', title:'FAIRNESS MONITORING PLAN', legalBasis:'Art. 9+10+26+4a  ·  D-EID: D-EID-031  ·  P2A Bridge: P-EID-023', mandatorySections:6, subDocuments:0, contractualInstruments:0 },
   ]),
   P3: Object.freeze([
     { code:'1', title:'Output 0.5 — Master Compliance Checklist', purpose:'20-item launch-gate checklist with CRITICAL / HIGH / ONGOING priorities, owners, effort estimates, status fields', legalBasis:'Art. 50 + Art. 26(7) + Art. 99', styleVariants:0 },
