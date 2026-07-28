@@ -6722,8 +6722,21 @@ async function execRun(){
     // do anything either -- it set a flag nothing was left to read. Give
     // every request both a hard timeout and a live AbortController so Abort
     // actually cancels the in-flight call instead of just hiding the overlay.
+    // 180s (the original value here) turned out to be shorter than a real,
+    // still-progressing generation can legitimately take for an 8+ page
+    // output at the fixed 8192-token budget under normal API latency --
+    // it was firing on genuinely healthy requests, not just dead ones after
+    // sleep, which surfaced as repeated false "Request aborted before
+    // completion." stops on retry (the retry was working; it just kept
+    // hitting the same too-short deadline again). This is a single total-
+    // duration timeout, not an inactivity timeout (the request isn't
+    // streamed, so there is no partial-progress signal to watch) -- it has
+    // to be generous enough to cover the slowest plausible real completion.
+    // 10 minutes is still a enormous improvement over the previous
+    // no-timeout-at-all state (which hung forever after a sleep cycle)
+    // without being tight enough to cut off normal generation.
     const _reqController=new AbortController();
-    const _reqTimeoutId=setTimeout(()=>{ try{ _reqController.abort(); }catch(e){} },180000);
+    const _reqTimeoutId=setTimeout(()=>{ try{ _reqController.abort(); }catch(e){} },600000);
     exec.currentAbortController=_reqController;
     try{
       if(st.claudeMode) await execClaudeMode(idx);
