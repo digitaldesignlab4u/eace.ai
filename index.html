@@ -6694,7 +6694,7 @@ async function execRun(){
     const idx=exec.outputs.findIndex(o=>o.state!=='complete');
     if(idx<0) break;
     const out=exec.outputs[idx];
-    if(out.state==='error'){
+    if(out.state==='error' || out.state==='partial'){
       exec.currentIdx=idx;
       exec.paused=true;
       const detail=out.lastError||'The previous request did not complete successfully.';
@@ -6743,17 +6743,30 @@ async function execRun(){
       else if(st.apiKey) await execApiMode(idx,_reqController.signal);
       else throw new Error('Real generation is not configured. Add an API key or use Manual Claude mode.');
     }catch(err){
-      out.state='error';
-      out.lastError=String(err&&err.message?err.message:err);
-      out.rawError=err&&err.raw?err.raw:null;
+      // execApiMode already set out.state='partial' and preserved the salvaged
+      // content for a PartialAbort — do not stomp that back to 'error' here.
+      if(out.state!=='partial'){
+        out.state='error';
+        out.lastError=String(err&&err.message?err.message:err);
+        out.rawError=err&&err.raw?err.raw:null;
+      }
       exec.paused=true;
       updatePauseBtn(true);
-      document.getElementById('exec-title').textContent='Generation stopped — current output failed';
-      document.getElementById('exec-sub').textContent=`${out.code}: ${out.lastError}. Completed outputs are preserved; use Continue from checkpoint for an explicit retry.`;
-      const banner=document.getElementById('exec-resume-banner');
-      if(banner) banner.style.display='flex';
-      const txt=document.getElementById('exec-resume-txt');
-      if(txt) txt.textContent=`${out.code} stopped. Completed outputs are preserved. Retry only this output, then continue sequentially.`;
+      if(out.state==='partial'){
+        document.getElementById('exec-title').textContent='Generation interrupted — partial content preserved';
+        document.getElementById('exec-sub').textContent=`${out.code}: ${out.lastError}`;
+        const banner=document.getElementById('exec-resume-banner');
+        if(banner) banner.style.display='flex';
+        const txt=document.getElementById('exec-resume-txt');
+        if(txt) txt.textContent=`${out.code} was interrupted but ${out.wordCount||0} words were captured and saved. Retry to regenerate it in full, or open Documents to review/export the captured text.`;
+      }else{
+        document.getElementById('exec-title').textContent='Generation stopped — current output failed';
+        document.getElementById('exec-sub').textContent=`${out.code}: ${out.lastError}. Completed outputs are preserved; use Continue from checkpoint for an explicit retry.`;
+        const banner=document.getElementById('exec-resume-banner');
+        if(banner) banner.style.display='flex';
+        const txt=document.getElementById('exec-resume-txt');
+        if(txt) txt.textContent=`${out.code} stopped. Completed outputs are preserved. Retry only this output, then continue sequentially.`;
+      }
       renderExecList(); updateExecProgress(); updateCheckpointButton(); saveExecState();
       return;
     }finally{
@@ -6910,7 +6923,7 @@ async function callAnthropicForOutput(model, tokenBudget, systemPromptParts, mes
     ? systemPromptParts.asString
     : String(systemPromptParts||'');
   let response;
-  const requestBody={model,max_tokens:tokenBudget,system:systemText,messages};
+  const requestBody={model,max_tokens:tokenBudget,system:systemText,messages,stream:true};
   const payloadJson=JSON.stringify(requestBody);
   const startedAt=performance.now();
   try{
@@ -6977,7 +6990,81 @@ async function callAnthropicForOutput(model, tokenBudget, systemPromptParts, mes
     if(response.status===400 && /credit balance/i.test(cleanMsg)) fail('Anthropic account credit balance is too low. Add credit at console.anthropic.com → Plans & Billing, then retry. [HTTP 400, type: '+errType+', request-id: '+(requestId||'n/a')+']');
     fail(`API ${response.status} (${errType||'unknown type'}, request-id: ${requestId||'n/a'}): ${cleanMsg.slice(0,220)}`);
   }
-  const data=await response.json();
+  // Stream the response and accumulate text as it arrives instead of
+  // awaiting the whole body at once. This is what makes partial-content
+  // salvage possible: on an abort mid-generation (timeout or explicit Abort
+  // click), whatever text has already streamed in can be returned to the
+  // caller instead of being discarded with the rest of the in-flight
+  // request -- the previous single-shot await response.json() had nothing
+  // to hand back until the entire response had completed.
+  let accumulatedText='';
+  let startUsage=null, finalUsage=null, stopReason=null, messageId=null;
+  const reader=response.body.getReader();
+  const decoder=new TextDecoder();
+  let buffer='';
+  function salvageOrThrow(sourceErr){
+    if(!accumulatedText.trim()) throw sourceErr;
+    const e=new Error('Request interrupted; partial content was captured.');
+    e.name='PartialAbort';
+    e.partialText=accumulatedText;
+    e.partialUsage=finalUsage||startUsage;
+    e.partialStopReason=stopReason;
+    e.cause=sourceErr;
+    throw e;
+  }
+  try{
+    while(true){
+      let readResult;
+      try{
+        readResult = await reader.read();
+      }catch(readErr){
+        if(readErr && readErr.name==='AbortError'){
+          const abortErr=new Error('Request aborted before completion.');
+          abortErr.name='AbortError';
+          salvageOrThrow(abortErr);
+        }
+        throw readErr;
+      }
+      if(readResult.done) break;
+      buffer += decoder.decode(readResult.value,{stream:true});
+      const events = buffer.split('\n\n');
+      buffer = events.pop(); // last chunk may be an incomplete event — keep it for next read
+      for(const evt of events){
+        let eventType=null, dataStr=null;
+        for(const line of evt.split('\n')){
+          if(line.startsWith('event:')) eventType=line.slice(6).trim();
+          else if(line.startsWith('data:')) dataStr=line.slice(5).trim();
+        }
+        if(!dataStr) continue;
+        let evData;
+        try{ evData=JSON.parse(dataStr); }catch(e){ continue; }
+        if(eventType==='message_start'){
+          messageId = (evData.message && evData.message.id) || messageId;
+          startUsage = (evData.message && evData.message.usage) || startUsage;
+        }else if(eventType==='content_block_delta'){
+          if(evData.delta && evData.delta.type==='text_delta' && typeof evData.delta.text==='string'){
+            accumulatedText += evData.delta.text;
+          }
+        }else if(eventType==='message_delta'){
+          if(evData.usage) finalUsage=Object.assign({},startUsage||{},evData.usage);
+          if(evData.delta && evData.delta.stop_reason) stopReason=evData.delta.stop_reason;
+        }else if(eventType==='error'){
+          const apiErr=new Error((evData.error&&evData.error.message)||'Streaming error from Anthropic API.');
+          apiErr.raw={streamError:evData.error||evData};
+          salvageOrThrow(apiErr);
+        }
+      }
+    }
+  }finally{
+    try{ reader.releaseLock(); }catch(e){}
+  }
+
+  const data={
+    id:messageId,
+    content:[{type:'text',text:accumulatedText}],
+    stop_reason:stopReason,
+    usage:finalUsage||startUsage||null,
+  };
   data._eaceTelemetry={httpStatus:response.status,requestId:response.headers.get('request-id')||response.headers.get('x-request-id')||data.id||null,latencyMs:Math.round(performance.now()-startedAt),payloadChars:payloadJson.length,model,stopReason:data.stop_reason||null,usage:data.usage||null};
   return data;
 }
@@ -7021,6 +7108,38 @@ async function execApiMode(idx, signal){
   try{
     data=await callAnthropicForOutput(model,tokenBudget,systemPromptParts,messages,configuredKey,signal);
   }catch(err){
+    if(err && err.name==='PartialAbort'){
+      // The request was interrupted (timeout/Abort) but Claude had already
+      // streamed some text back. Preserve it as a distinct 'partial' state
+      // instead of discarding it like a hard failure -- the user already
+      // paid for the tokens that produced it, and re-running from scratch
+      // would burn the same cost again for no reason.
+      const partialText=String(err.partialText||'').trim();
+      const partialValidation=validateGeneratedOutput(exec.pillar,out.code,partialText,{stopReason:'aborted'});
+      out.state='partial';
+      out.content=partialText;
+      out.wordCount=partialValidation.wordCount;
+      out.estimatedPages=partialValidation.estimatedPages;
+      out.validation=partialValidation;
+      out.stopReason='aborted';
+      out.rawError=null;
+      out.lastError=`Generation was interrupted after ${partialValidation.wordCount} words were captured. This is INCOMPLETE and not a finished regulatory artifact — retry to regenerate it in full.`;
+      if(err.partialUsage){
+        const reqCost=calculateRequestCost(model,err.partialUsage);
+        exec.actualCostUsd=(exec.actualCostUsd||0)+reqCost;
+        out.costUsd=(out.costUsd||0)+reqCost;
+        out.usage=err.partialUsage;
+        out.lastUsage=err.partialUsage;
+        updateExecCostDisplay();
+      }
+      out.model=model;
+      out.generatedAt=new Date().toISOString();
+      logAudit('run',`Output ${out.code} INTERRUPTED — ${partialValidation.wordCount} partial words preserved (${model}).`,exec.pillar,st.data.sysName||'—');
+      persistCompletedExecOutput(out);
+      renderExecList(); updateExecProgress();
+      saveExecState();
+      throw err;
+    }
     out.state='error';
     out.lastError=String(err&&err.message?err.message:err);
     out.rawError=err&&err.raw?err.raw:null;
@@ -7617,7 +7736,7 @@ function execPauseResume(){
     // A failed/interrupted output cannot be resumed by merely restarting the loop:
     // its one-dispatch guard would immediately stop it again. A user click here is
     // therefore treated as the explicit manual retry authorised by the user.
-    if(out && (out.state==='error' || out.interrupted || (out.requestsDispatched||0)>=1)){
+    if(out && (out.state==='error' || out.state==='partial' || out.interrupted || (out.requestsDispatched||0)>=1)){
       execResume();
       return;
     }
@@ -7679,7 +7798,7 @@ function updatePauseBtn(paused){
   const btn = document.getElementById('exec-pause-btn');
   if(!btn) return;
   const firstUnfinished=exec.outputs&&exec.outputs.find(o=>o.state!=='complete');
-  const needsRetry=!!(paused && firstUnfinished && (firstUnfinished.state==='error' || firstUnfinished.interrupted || (firstUnfinished.requestsDispatched||0)>=1));
+  const needsRetry=!!(paused && firstUnfinished && (firstUnfinished.state==='error' || firstUnfinished.state==='partial' || firstUnfinished.interrupted || (firstUnfinished.requestsDispatched||0)>=1));
   btn.textContent = paused ? (needsRetry ? '↻ Retry current output & continue' : '▶ Continue run') : '⏸ Pause after current output';
   btn.classList.toggle('resuming', paused);
   updateCheckpointButton();
@@ -7715,8 +7834,8 @@ function updateCheckpointButton(){
   }
 
   const requestInFlight=!!exec._running && !exec.paused && out.state==='running';
-  const needsRetry=!!(out.state==='error' || out.interrupted || (exec.paused && (out.requestsDispatched||0)>=1));
-  const canContinue=!!exec.paused || out.state==='error' || out.interrupted;
+  const needsRetry=!!(out.state==='error' || out.state==='partial' || out.interrupted || (exec.paused && (out.requestsDispatched||0)>=1));
+  const canContinue=!!exec.paused || out.state==='error' || out.state==='partial' || out.interrupted;
 
   btn.disabled=!canContinue || requestInFlight;
   btn.style.opacity=btn.disabled ? '0.55' : '1';
@@ -7899,13 +8018,13 @@ function renderOutputView(){
             ${docs.map((d,i)=>{
               const gen=genOutputs[i];
               const state=gen?gen.state:'pending';
-              const stateColors={done:'var(--green)',error:'var(--red)',skipped:'var(--faint)',pending:'var(--border)',running:'var(--gold)'};
+              const stateColors={done:'var(--green)',error:'var(--red)',partial:'var(--amber)',skipped:'var(--faint)',pending:'var(--border)',running:'var(--gold)'};
               const dotColor=stateColors[state]||'var(--border)';
               return `<button class="output-row${i===st.doc?' active-doc':''}" onclick="selectDoc(${i})">
                 <span class="output-dot" style="background:${dotColor};"></span>
                 <span class="output-code">${esc(d.code)}</span>
                 <span class="output-meta"><span class="output-doc-title">${esc(d.title)}</span><span class="output-article">${esc(d.article)}</span></span>
-                ${(state==='done'||state==='complete')?'<span class="output-ready-badge">ready</span>':state==='error'?'<span class="output-ready-badge" style="color:var(--red-bright);border-color:rgba(224,112,112,0.3);">blocked</span>':'<span class="output-ready-badge" style="color:var(--faint);border-color:var(--border);">'+(state==='skipped'?'skipped':'queued')+'</span>'}
+                ${(state==='done'||state==='complete')?'<span class="output-ready-badge">ready</span>':state==='error'?'<span class="output-ready-badge" style="color:var(--red-bright);border-color:rgba(224,112,112,0.3);">blocked</span>':state==='partial'?'<span class="output-ready-badge" style="color:var(--amber);border-color:rgba(211,168,74,0.35);">partial</span>':'<span class="output-ready-badge" style="color:var(--faint);border-color:var(--border);">'+(state==='skipped'?'skipped':'queued')+'</span>'}
                 <span class="output-pages">${d.pages}p</span>
               </button>`;
             }).join('')}
@@ -7913,7 +8032,10 @@ function renderOutputView(){
           <!-- Content panel -->
           <div class="output-content-wrap ${styleClass}">
             ${hasContent && selGen && selGen.content
-              ? renderOutputContent(selGen.content, st.docStyle)
+              ? (selGen.state==='partial'
+                  ? `<div class="sim-mode-banner" style="margin-bottom:14px;">⚠ PARTIAL — generation was interrupted before this output finished (${selGen.wordCount||0} words captured, not a complete regulatory artifact). Retry ${esc(selDoc.code||'')} from the run screen to regenerate it in full.</div>`
+                  : ''
+                ) + renderOutputContent(selGen.content, st.docStyle)
               : `<div class="output-preview-sticky" style="width:300px;">
                   <div class="preview-doc-sheet">
                     <div class="preview-doc-eyebrow">EACE  &middot;  EU AI Compliance Engine</div>
@@ -11792,11 +11914,13 @@ function buildMasterRegulatoryPackage(sys, pillar, outputs, review){
 function persistCompletedExecOutput(out){
   try{
     const sys=st.systems.find(function(s){return s.id===st.activeId;});
-    if(!sys||!out||out.state!=='complete'||!String(out.content||'').trim()) return;
+    if(!sys||!out) return;
+    if(out.state!=='complete'&&out.state!=='partial') return;
+    if(!String(out.content||'').trim()) return;
     if(!sys.generatedOutputs) sys.generatedOutputs=[];
     const record={
       pillar:exec.pillar, code:out.code, title:out.title, article:out.article, cat:out.cat,
-      pages:out.estimatedPages||out.pages||0, content:out.content||'', state:'complete',
+      pages:out.estimatedPages||out.pages||0, content:out.content||'', state:out.state,
       wordCount:out.wordCount||0, estimatedPages:out.estimatedPages||0, model:out.model||'',
       stopReason:out.stopReason||null, continuationCount:out.continuationCount||0,
       validation:out.validation||null, telemetry:out.telemetry||[],
@@ -51404,7 +51528,11 @@ function promptOf(o){let p=String(o&&(o.promptId||o.pillar||o.prompt||o.engine)|
 function outputs(s,scope){
  let a=[];try{if(window.__eaceV32&&typeof __eaceV32.outputs==='function')a=__eaceV32.outputs(s)||[]}catch(e){}
  if(!a.length){const pools=[s.generatedOutputs,s.outputs,s.documents,s.completedOutputs];for(const p of pools)if(Array.isArray(p))a.push(...p)}
- a=a.filter(o=>o&&String(o.content||o.text||o.body||'').trim()).map(o=>Object.assign({},o,{content:String(o.content||o.text||o.body||''),promptId:promptOf(o)||o.promptId||o.pillar}));
+ // An output interrupted mid-generation (state:'partial') is preserved so it
+ // is never lost, but it is not a finished regulatory artefact -- it must
+ // never be silently bundled into a "complete" export package as if it were.
+ // It stays fully visible and recoverable from the Documents tab instead.
+ a=a.filter(o=>o&&o.state!=='partial'&&String(o.content||o.text||o.body||'').trim()).map(o=>Object.assign({},o,{content:String(o.content||o.text||o.body||''),promptId:promptOf(o)||o.promptId||o.pillar}));
  if(PROMPTS.includes(scope))a=a.filter(o=>promptOf(o)===scope);
  const seen=new Set();return a.filter(o=>{const k=promptOf(o)+'|'+String(o.code||o.outputId||o.title||'');if(seen.has(k))return false;seen.add(k);return true});
 }
@@ -51575,7 +51703,9 @@ function allOutputs(s,scope){
  if(!a.length){for(const k of ['generatedOutputs','outputs','documents','completedOutputs'])if(Array.isArray(s&&s[k]))a.push(...s[k])}
  const p=String(scope||'complete').toUpperCase();
  if(PROMPTS.includes(p))a=a.filter(o=>String(o.promptId||o.pillar||o.prompt||o.engine||'').toUpperCase().replace(/[-_\s]/g,'')===p);
- return a.filter(o=>o&&String(o.content||o.text||o.body||'').trim());
+ // Interrupted (state:'partial') content is preserved but must never be
+ // silently bundled into a "complete" export as a finished artefact.
+ return a.filter(o=>o&&o.state!=='partial'&&String(o.content||o.text||o.body||'').trim());
 }
 function download(blob,name){
  if(!(blob instanceof Blob)||blob.size<64)throw new Error('Generated file is empty or invalid.');
