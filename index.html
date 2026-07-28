@@ -371,7 +371,7 @@ a{color:var(--gold);text-decoration:none;}
 /* Field controls */
 .ctrl-text,.ctrl-textarea,.ctrl-url,.ctrl-select{
   display:block;width:100%;background:var(--input-bg);border:0.5px solid var(--border-2);
-  border-radius:var(--radius-sm);padding:12px 12px;font-size:18px;font-weight:500;color:var(--ink);
+  border-radius:var(--radius-sm);padding:12px 12px;font-size:15px;font-weight:400;color:var(--ink);
   transition:border-color .15s,background .15s,box-shadow .15s;
 }
 .ctrl-textarea{resize:vertical;min-height:80px;line-height:1.55;}
@@ -2206,7 +2206,7 @@ a{color:var(--gold);text-decoration:none;}
 .msp-section{background:var(--panel);border:0.5px solid var(--border-2);border-radius:var(--radius-md);padding:18px 20px;margin-bottom:24px;}
 .msp-section-title{font-family:'DM Mono','IBM Plex Mono',Consolas,monospace;font-size:8.5px;letter-spacing:0.14em;text-transform:uppercase;color:var(--gold-2);margin-bottom:14px;padding-bottom:8px;border-bottom:0.5px solid var(--border);}
 .msp-field{margin-bottom:14px;}
-.msp-field-label{display:flex;align-items:center;gap:8px;font-family:var(--font-sans-nav);font-size:14px;letter-spacing:0.05em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:6px;}
+.msp-field-label{display:flex;align-items:center;gap:8px;font-family:var(--font-sans-nav);font-size:15px;letter-spacing:0.03em;text-transform:uppercase;color:var(--ink);font-weight:700;margin-bottom:6px;}
 .msp-required{color:var(--gold);}
 .msp-empty-badge{font-size:7px;padding:2px 6px;background:rgba(200,80,80,0.1);border:0.5px solid rgba(200,80,80,0.3);border-radius:2px;color:#d07070;letter-spacing:0.06em;}
 .msp-field-status{margin-bottom:5px;}
@@ -2230,7 +2230,7 @@ a{color:var(--gold);text-decoration:none;}
 .asm-status-approved{border-color:var(--green);color:var(--green);}
 .asm-status-archived{border-color:var(--faint);color:var(--faint);opacity:.5;}
 
-.field-help-text{font-size:15px;color:var(--muted);margin-bottom:6px;line-height:1.5;}
+.field-help-text{font-size:12.5px;color:var(--muted);margin-bottom:6px;line-height:1.5;}
 .field-notes-details{margin-top:6px;}
 .field-notes-toggle{font-family:'DM Mono','IBM Plex Mono',Consolas,monospace;font-size:11px;color:var(--gold-2);cursor:pointer;letter-spacing:0.04em;text-decoration:underline;text-underline-offset:2px;}
 .field-notes-details summary{list-style:none;font-family:'DM Mono','IBM Plex Mono',Consolas,monospace;font-size:12px;color:var(--gold-2);cursor:pointer;letter-spacing:0.04em;text-decoration:underline;text-underline-offset:2px;}
@@ -4063,8 +4063,8 @@ function sf(id,v){
   sf._pending=setTimeout(function(){
     sf._pending=null;
     if(window._isPasting && window._isPasting()) return;
-    if(st._masterIntakeMode) miRefreshForm();
-    else renderFormSection_update();
+    if(st._masterIntakeMode) miRefreshForm(id);
+    else renderFormSection_update(id);
   }, 120);
 }
 
@@ -4746,7 +4746,7 @@ function renderField(f){
 
   let ctrl='';
   switch(f.type){
-    case 'check': ctrl=renderCheckItem(f); return`<div class="form-field"${prefilled?' style="'+prefilledStyle+'"':''}>${ctrl}</div>`;
+    case 'check': ctrl=renderCheckItem(f); return`<div class="form-field" data-field-id="${f.id}"${prefilled?' style="'+prefilledStyle+'"':''}>${ctrl}</div>`;
     case 'bool': ctrl=renderToggle(f,val); break;
     case 'seg': ctrl=renderSeg(f,val); break;
     case 'text': ctrl=`<input class="ctrl-text" type="text" value="${esc(val||'')}" placeholder="${esc(f.placeholder||'')}" oninput="sf('${f.id}',this.value)"/>`; break;
@@ -4761,7 +4761,7 @@ function renderField(f){
   const selectedOther=f.type==='ms' && Array.isArray(val) && val.includes('Other');
   const otherHtml=selectedOther?`<textarea class="note-area" style="margin-top:8px;" placeholder="Specify other option(s)…" oninput="sf('${f.id}Other',this.value)">${esc(g(f.id+'Other')||'')}</textarea>`:'';
   const noteHtml=f.note?`<button class="note-toggle" onclick="toggleNote('${f.id}')">✎ Add note${noteOpen?' ▾':' ▸'}</button>${noteOpen?`<textarea class="note-area" placeholder="${esc(f.notePh||'Add detail…')}" oninput="sf('${f.id}Note',this.value)">${esc(g(f.id+'Note')||'')}</textarea>`:''}`:'' ;
-  return`<div class="form-field"${prefilled?' style="'+prefilledStyle+'"':''}>${labelHtml}${ctrl}${otherHtml}${noteHtml}</div>`;
+  return`<div class="form-field" data-field-id="${f.id}"${prefilled?' style="'+prefilledStyle+'"':''}>${labelHtml}${ctrl}${otherHtml}${noteHtml}</div>`;
 }
 
 // ── DYNAMIC MS (combined overlays — options computed at render time) ──
@@ -4869,7 +4869,7 @@ function handleCheck(id,checked,isExempt){
   else if(checked&&(id==='exA'||id==='exB'||id==='exC'||id==='exD')){sf('exE',false);}
   sf(id,checked);
 }
-function renderFormSection_update(){
+function renderFormSection_update(anchorId){
   if(renderFormSection_update._busy) return;
   renderFormSection_update._busy=true;
   try{
@@ -4879,7 +4879,22 @@ function renderFormSection_update(){
     const activeId   = document.activeElement ? document.activeElement.id : null;
     const activeSelS = document.activeElement ? document.activeElement.selectionStart : null;
     const activeSelE = document.activeElement ? document.activeElement.selectionEnd   : null;
-    const scrollTop  = el.closest('.eng-form-col') ? el.closest('.eng-form-col').scrollTop : 0;
+    // .eng-form-wrap has overflow-y:auto directly on itself (see CSS) — it IS
+    // the scroll container here, not an ancestor. The previous el.closest('.eng-form-col')
+    // never matched anything in this view (that class only exists in the
+    // separate Master Intake skeleton), so scroll position was silently never
+    // restored at all after any re-render in the P1-P4 wizard.
+    const col = el;
+    const scrollTop  = col ? col.scrollTop : 0;
+    // Anchor to the field that actually changed, not just the raw scroll
+    // offset — if answering it reveals/hides other conditional fields, the
+    // page height shifts and an absolute-offset restore lands on an
+    // unrelated field further down (reported as the screen "skipping
+    // ahead"). Anchoring to the field's own on-screen position keeps it
+    // fixed under the cursor regardless of what moved around it.
+    const anchorSel = anchorId ? `[data-field-id="${anchorId}"]` : null;
+    const anchorBefore = anchorSel ? el.querySelector(anchorSel) : null;
+    const anchorTopBefore = anchorBefore ? anchorBefore.getBoundingClientRect().top : null;
     el.innerHTML = renderFormSection();
     // Restore focus and cursor
     if(activeId){
@@ -4891,9 +4906,23 @@ function renderFormSection_update(){
         }
       }
     }
-    // Restore scroll
-    const col = el.closest('.eng-form-col');
-    if(col) col.scrollTop = scrollTop;
+    // Restore scroll: prefer the field anchor, fall back to raw offset.
+    // Deferred to the next animation frame — see miRefreshForm for why a
+    // synchronous measurement here can be undone by a later layout pass.
+    if(col){
+      if(anchorTopBefore!==null && anchorSel){
+        requestAnimationFrame(function(){
+          const anchorAfter = el.querySelector(anchorSel);
+          if(anchorAfter){
+            col.scrollTop += (anchorAfter.getBoundingClientRect().top - anchorTopBefore);
+          } else {
+            col.scrollTop = scrollTop;
+          }
+        });
+      } else {
+        col.scrollTop = scrollTop;
+      }
+    }
   } finally{ renderFormSection_update._busy=false; }
 }
 
@@ -6499,7 +6528,21 @@ async function execRun(){
     saveExecState();
     await sleep(400);
   }
-  if(!exec.aborted) await execComplete();
+  if(!exec.aborted){
+    try{
+      await execComplete();
+    }catch(e){
+      // Defense in depth: execComplete()'s own critical section already saves
+      // generatedOutputs/sys.ran before any enrichment step can fail, but a
+      // failure at the very top of execComplete() (or here) must still never
+      // be silent — individual outputs are already persisted incrementally by
+      // persistCompletedExecOutput() above regardless of this outcome.
+      console.error('execComplete() failed', e);
+      showToast('Generation finished, but finalisation encountered an error: '+(e&&e.message||e)+'. Individual outputs were already saved — check the Documents tab.', 'var(--red-bright)');
+      exec.running=false;
+      try{ const overlay=document.getElementById('exec-overlay'); if(overlay) overlay.style.display='none'; }catch(_e){}
+    }
+  }
 }
 
 // ── API MODE — Real Anthropic call ──
@@ -10074,7 +10117,7 @@ function masterToggleMS(id, opt){
   miRefreshForm();
 }
 
-function miRefreshForm(){
+function miRefreshForm(anchorId){
   if(miRefreshForm._busy) return;
   miRefreshForm._busy = true;
   try{
@@ -10083,6 +10126,12 @@ function miRefreshForm(){
     const selE      = document.activeElement ? document.activeElement.selectionEnd   : null;
     const col       = $id('master-form-col');
     const scrollTop = col ? col.scrollTop : 0;
+    // Anchor to the field that actually changed (see renderFormSection_update
+    // for the full rationale) — a conditional field appearing/disappearing
+    // elsewhere in the accordion must not shift what the user is looking at.
+    const anchorSel = anchorId ? `[data-field-id="${anchorId}"]` : null;
+    const anchorBefore = (col && anchorSel) ? col.querySelector(anchorSel) : null;
+    const anchorTopBefore = anchorBefore ? anchorBefore.getBoundingClientRect().top : null;
     const d = st.data;
 
     // Refresh every currently-expanded section's field wrap (not just one) —
@@ -10117,7 +10166,25 @@ function miRefreshForm(){
         }
       }
     }
-    if(col) col.scrollTop = scrollTop;
+    // Restore scroll: prefer the field anchor, fall back to raw offset.
+    // Deferred to the next animation frame — some browsers settle final
+    // layout (e.g. native <select> metrics) a tick after innerHTML is
+    // assigned, so measuring/adjusting scrollTop synchronously here can be
+    // undone by that later layout pass.
+    if(col){
+      if(anchorTopBefore!==null && anchorSel){
+        requestAnimationFrame(function(){
+          const anchorAfter = col.querySelector(anchorSel);
+          if(anchorAfter){
+            col.scrollTop += (anchorAfter.getBoundingClientRect().top - anchorTopBefore);
+          } else {
+            col.scrollTop = scrollTop;
+          }
+        });
+      } else {
+        col.scrollTop = scrollTop;
+      }
+    }
   } finally{ miRefreshForm._busy=false; }
 }
 
@@ -10895,7 +10962,7 @@ function renderMasterField(f, d){
   const isFilled = val!==undefined&&val!==''&&val!==null&&!(Array.isArray(val)&&val.length===0);
   const miInfoBtn = f.legal ? `<button class="info-btn" onclick="toggleInfo(event,'${rf.id}','${esc(rf.label)}','${esc(f.legal||'')}','${esc(rf.sub||'')}')">i</button>` : '';
   const hasSingleCtrl = !['bool','seg','ms'].includes(rf.type);
-  return `<div class="field-row${rf.required&&!isFilled?' field-required-empty':''}">
+  return `<div class="field-row${rf.required&&!isFilled?' field-required-empty':''}" data-field-id="${rf.id}">
     <div class="field-label-row">
       <${hasSingleCtrl?'label':'div'} class="field-label"${hasSingleCtrl?` for="fld_${rf.id}"`:''}>${esc(rf.label)}${rf.required?'<span style="color:var(--red-bright);margin-left:3px;">*</span>':''}</${hasSingleCtrl?'label':'div'}>
       ${miInfoBtn}
@@ -11491,23 +11558,22 @@ async function execComplete(){
   if(_sys){
     const allGeneratedOutputs = exec.outputs.filter(o=>(o.state==='done'||o.state==='complete')&&String(o.content||'').trim());
     const doneOutputs = exec.outputs.filter(o=>o.state==='done'||o.state==='complete');
-    const finalReview = buildFinalRegulatoryReview(_sys, exec.pillar, allGeneratedOutputs);
-    const masterPackage = buildMasterRegulatoryPackage(_sys, exec.pillar, allGeneratedOutputs, finalReview);
-    logAudit('review',`Final Regulatory Review complete for ${exec.pillar}: ${finalReview.status}`,exec.pillar,st.data.sysName||'—');
-    logAudit('package',`Master Regulatory Package assembled for ${exec.pillar}: ${masterPackage.outputCount} outputs`,exec.pillar,st.data.sysName||'—');
     const doneCount   = doneOutputs.length;
-    // Record decision traces for every output actually completed in this run —
-    // previously gated on exec.current/exec.results, which are only set by
-    // the unrelated 'view a specific output' function and were never
-    // populated during real generation, so this never fired in practice.
-    doneOutputs.forEach(function(o){
-      try{ extractAndRecordTrace(_sys, o, exec.pillar, o.content); }
-      catch(e){ logAudit('trace-error', o.code+': '+(e&&e.message||e), exec.pillar, st.data.sysName||'—'); }
-    });
 
-    // Populate sys.generatedOutputs (the Documents tab reads from here)
+    // ── CRITICAL SECTION — runs first and unconditionally. ──
+    // Real generation costs real money (Anthropic API billing) before this
+    // function is ever reached. Previously, buildFinalRegulatoryReview() /
+    // buildMasterRegulatoryPackage() ran BEFORE the outputs were written to
+    // sys.generatedOutputs and BEFORE sys.ran[pillar] was set, with no
+    // try/catch around either call and no try/catch around the execComplete()
+    // call site. Any exception there (plausible on real, long, unpredictable
+    // model output — the fake/simulated content used in earlier testing never
+    // exercised this path) silently aborted the whole function: the billed
+    // outputs were never saved, the Documents tab stayed empty, and the
+    // Evidence/Export tabs stayed locked (both gated on Object.keys(sys.ran).
+    // length>0). Saving the actual generated content and unlocking those tabs
+    // now happens FIRST and is never skipped by a failure below.
     if(!_sys.generatedOutputs) _sys.generatedOutputs=[];
-    // Remove previous outputs for this pillar, add new ones
     _sys.generatedOutputs = _sys.generatedOutputs.filter(o=>o.pillar!==exec.pillar);
     allGeneratedOutputs.forEach(function(o){
       _sys.generatedOutputs.push({
@@ -11530,17 +11596,44 @@ async function execComplete(){
         evidenceId:'EV-'+exec.pillar+'-'+o.code+'-'+Date.now(),
       });
     });
-    // Final review is appended locally; it never triggers another model call.
-    _sys.generatedOutputs.push({
-      pillar:exec.pillar, code:'FRR', title:'Final Regulatory Review', article:'Package-level consistency review', cat:'Review', pages:1,
-      content:'# Final Regulatory Review\n\nStatus: '+finalReview.status+'\n\n'+finalReview.checks.map(c=>'- '+c.theme+': '+(c.present?'covered':'not detected — expert confirmation required')).join('\n'),
-      state:'complete', wordCount:0, estimatedPages:1, model:'deterministic-local', stopReason:'local_review', continuationCount:0,
-      validation:{valid:true,warnings:finalReview.crossReferenceAdvisories.length?['Cross-reference advisories recorded.']:[]}, telemetry:[],
-      ts:finalReview.generatedAt, evidenceId:'EV-'+exec.pillar+'-FRR-'+Date.now()
-    });
-
-    // Sync sys.docs badge
     _sys.docs = _sys.generatedOutputs.length;
+    if(!_sys.ran) _sys.ran={};
+    _sys.ran[exec.pillar]=new Date().toISOString();
+    try{ saveSystems(); }catch(e){ console.error('Critical-section save failed', e); }
+    // ── End critical section. Everything below is best-effort enrichment —
+    // each step is independently guarded so one failure cannot undo the save
+    // above or hide the others, and any failure is surfaced to the user
+    // instead of failing silently. ──
+
+    let finalReview=null, masterPackage=null;
+    try{
+      finalReview = buildFinalRegulatoryReview(_sys, exec.pillar, allGeneratedOutputs);
+      masterPackage = buildMasterRegulatoryPackage(_sys, exec.pillar, allGeneratedOutputs, finalReview);
+      logAudit('review',`Final Regulatory Review complete for ${exec.pillar}: ${finalReview.status}`,exec.pillar,st.data.sysName||'—');
+      logAudit('package',`Master Regulatory Package assembled for ${exec.pillar}: ${masterPackage.outputCount} outputs`,exec.pillar,st.data.sysName||'—');
+      // Final review is appended locally; it never triggers another model call.
+      _sys.generatedOutputs = _sys.generatedOutputs.filter(o=>!(o.pillar===exec.pillar&&o.code==='FRR'));
+      _sys.generatedOutputs.push({
+        pillar:exec.pillar, code:'FRR', title:'Final Regulatory Review', article:'Package-level consistency review', cat:'Review', pages:1,
+        content:'# Final Regulatory Review\n\nStatus: '+finalReview.status+'\n\n'+finalReview.checks.map(c=>'- '+c.theme+': '+(c.present?'covered':'not detected — expert confirmation required')).join('\n'),
+        state:'complete', wordCount:0, estimatedPages:1, model:'deterministic-local', stopReason:'local_review', continuationCount:0,
+        validation:{valid:true,warnings:finalReview.crossReferenceAdvisories.length?['Cross-reference advisories recorded.']:[]}, telemetry:[],
+        ts:finalReview.generatedAt, evidenceId:'EV-'+exec.pillar+'-FRR-'+Date.now()
+      });
+      _sys.docs = _sys.generatedOutputs.length;
+    }catch(e){
+      console.error('Final Regulatory Review / Master Package build failed — generated outputs were already saved above.', e);
+      showToast('Documents were saved, but the Final Regulatory Review summary could not be built: '+(e&&e.message||e), 'var(--amber)');
+    }
+
+    // Record decision traces for every output actually completed in this run —
+    // previously gated on exec.current/exec.results, which are only set by
+    // the unrelated 'view a specific output' function and were never
+    // populated during real generation, so this never fired in practice.
+    doneOutputs.forEach(function(o){
+      try{ extractAndRecordTrace(_sys, o, exec.pillar, o.content); }
+      catch(e){ logAudit('trace-error', o.code+': '+(e&&e.message||e), exec.pillar, st.data.sysName||'—'); }
+    });
 
     // Auto-inherit P1 outputs into st.data for downstream pillars
     if(exec.pillar==='P1'){
@@ -11603,31 +11696,41 @@ async function execComplete(){
       }
     }
 
-    // Audit record
-    addAuditRecord(_sys,'run','Engine run complete -- '+ENGINE_LABELS[exec.pillar],ENGINE_LABELS[exec.pillar],null,doneCount+' documents generated',null,null);
-    _sys.data.lastUpdated=new Date().toLocaleDateString('en-GB');
-    if(!_sys.ran) _sys.ran={};
-    _sys.ran[exec.pillar]=new Date().toISOString();
-    try{ snapshotPillarDeps(_sys, exec.pillar); }catch(e){}
+    // Audit record + dependency snapshot — sys.ran[pillar] and generatedOutputs
+    // are already saved above; a failure here is logged and surfaced but no
+    // longer capable of losing the generated content or re-locking the tabs.
+    try{
+      addAuditRecord(_sys,'run','Engine run complete -- '+ENGINE_LABELS[exec.pillar],ENGINE_LABELS[exec.pillar],null,doneCount+' documents generated',null,null);
+      _sys.data.lastUpdated=new Date().toLocaleDateString('en-GB');
+      snapshotPillarDeps(_sys, exec.pillar);
+    }catch(e){
+      console.error('Post-run audit/dependency snapshot failed', e);
+    }
 
     // Auto-create evidence entries for completed outputs
-    for(const o of doneOutputs){
-      var evId='EV-'+exec.pillar+'-'+o.code+'-'+new Date().toISOString().slice(0,10).replace(/-/g,'');
-      var realHash = await sha256Hex(o.content||'');
-      var evItem={
-        id:evId, type:o.cat||'Document', title:o.title||o.code,
-        article:o.article||'', pillar:exec.pillar, outputCode:o.code,
-        hash:realHash, hashAlgo:'SHA-256',
-        ts:new Date().toISOString(), status:'Generated', sysId:_sys.id,
-      };
-      if(!_sys.evidence) _sys.evidence=[];
-      if(!_sys.evidence.find(function(e){return e.id===evId;})){
-        _sys.evidence.unshift(evItem);
-        addToGlobalEvidence(evItem,_sys);
+    try{
+      for(const o of doneOutputs){
+        var evId='EV-'+exec.pillar+'-'+o.code+'-'+new Date().toISOString().slice(0,10).replace(/-/g,'');
+        var realHash = await sha256Hex(o.content||'');
+        var evItem={
+          id:evId, type:o.cat||'Document', title:o.title||o.code,
+          article:o.article||'', pillar:exec.pillar, outputCode:o.code,
+          hash:realHash, hashAlgo:'SHA-256',
+          ts:new Date().toISOString(), status:'Generated', sysId:_sys.id,
+        };
+        if(!_sys.evidence) _sys.evidence=[];
+        if(!_sys.evidence.find(function(e){return e.id===evId;})){
+          _sys.evidence.unshift(evItem);
+          addToGlobalEvidence(evItem,_sys);
+        }
       }
+    }catch(e){
+      console.error('Evidence-register hashing failed — generated outputs were already saved above.', e);
+      showToast('Documents were saved, but evidence-register entries could not be created: '+(e&&e.message||e), 'var(--amber)');
     }
-    saveSystems();
-    clearExecState(st.activeId, exec.pillar);
+
+    try{ saveSystems(); }catch(e){ console.error('Final save failed', e); }
+    try{ clearExecState(st.activeId, exec.pillar); }catch(e){}
 
     // Surface a clear, visible summary — the previous behaviour left the user
     // to discover failures only by scrolling through individual output badges,
@@ -49560,7 +49663,7 @@ function resolveSystem(id){
 }
 
 function promptsFor(system){return PROMPTS.filter(p=>collectOutputs(system,p).length)}
-function slug(v){return String(v||'ai-system').replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'').toLowerCase()}
+function slug(v){return String(v||'ai-system').replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'').toLowerCase().slice(0,40).replace(/-+$/,'')||'ai-system'}
 function download(blob,name){
   if(!blob)throw new Error('No file was generated.');
   const url=URL.createObjectURL(blob),a=document.createElement('a');
@@ -49807,7 +49910,7 @@ function button(label,s,format,scope,primary){return '<button type="button" clas
 window.renderSWAssessment=function(s){s=bindSystem(s||resolveSystem());if(!s)return '<div class="sw-overview">No active system.</div>';const desc={P1:'Territorial scope, Article 5 stop gate, Annex III and GPAI dependency.',P2A:'High-risk provider documentation, QMS, Annex IV and conformity assessment.',P2B:'Article 26, human oversight, logs, DPIA and FRIA evidence.',P3:'Article 50 notices, AI interaction, synthetic content and disclosure matrix.',P4:'Residual obligations, voluntary code and minimal-risk confirmation.'};const cards=V25_PROMPTS.map(p=>{const n=allOutputs(s,p).length,a=((s.promptAttachments||{})[p]||[]).length;return '<article class="v25-module '+(n?'completed':'')+'" data-v25-prompt-card="'+p+'"><button type="button" class="v25-module-main" data-v25-launch="1" data-system="'+esc(s.id)+'" data-prompt="'+p+'"><div class="v25-code">'+p+(n?' ↻':' ▶')+'</div><div class="v25-title">'+esc(V25_LABELS[p])+'</div><div class="v25-desc">'+esc(desc[p])+'</div><div class="v25-status">'+(n?('Completed · '+n+' outputs · rerun available'):'Ready')+'</div></button><div class="v25-attach"><label class="v25-btn primary" style="display:inline-block">Attach supporting document(s)<input type="file" multiple hidden accept=".pdf,.docx,.xlsx,.xls,.pptx,.odt,.ods,.rtf,.txt,.md,.csv,.json,.xml,.html,.yaml,.yml,.zip,.png,.jpg,.jpeg,.webp,.svg" data-v25-file-input="1" data-system="'+esc(s.id)+'" data-prompt="'+p+'" onchange="return window.eaceV25HandleFiles(this)"></label><div class="v25-small" data-v25-attach-count="'+p+'" style="margin-top:8px">'+a+' attached to '+p+'</div></div></article>'}).join('');return '<div class="sw-overview"><div class="v25-doc-head"><div class="v25-kicker">Assessment mode</div><div class="v25-small">Select a prompt card to start or rerun it. Attachments belong to a specific prompt and do not start generation.</div></div><div class="v25-kicker" style="margin-top:24px">Available modules</div><div class="v25-module-grid">'+cards+'</div></div>'};
 window.renderSWDocuments=function(s){s=bindSystem(s||resolveSystem());const ps=s?completedPrompts(s):[];if(!s||!ps.length)return '<div class="sw-overview"><div class="v25-doc-head">No completed documents are available.</div></div>';let h='<div class="sw-overview"><section class="v25-doc-head"><div class="v25-doc-head-top"><div><div class="v25-kicker">Documents</div><h2>Completed documentation</h2><div class="v25-small">Complete-case exports include every completed prompt for this AI system.</div></div><div class="v25-actions">'+button('One complete DOCX',s,'docx','complete',true)+button('Complete PDF',s,'pdf','complete')+button('Case ZIP',s,'zip','complete')+'</div></div><div class="v25-tabs">';ps.forEach((p,i)=>h+='<button type="button" class="v25-tab '+(i===0?'active':'')+'" data-v25-tab="'+p+'">'+p+' '+allOutputs(s,p).length+'</button>');h+='</div></section>';ps.forEach((p,i)=>h+='<section class="v25-panel" data-v25-panel="'+p+'" style="display:'+(i?'none':'block')+'"><div class="v25-panel-head"><div><div class="v25-kicker">'+p+' · '+allOutputs(s,p).length+' completed outputs</div><h2>'+esc(V25_LABELS[p])+'</h2></div><div class="v25-actions">'+button('Download '+p+' DOCX',s,'docx',p,true)+button(p+' PDF',s,'pdf',p)+button(p+' ZIP',s,'prompt-zip',p)+'</div></div></section>');return h+'</div>'};
 window.renderSWExport=function(s){s=bindSystem(s||resolveSystem());if(!s)return '<div class="sw-overview"><div class="v25-export-head">No active system.</div></div>';const selected=window.v25Package||'regulatory',ps=completedPrompts(s),count=allOutputs(s).length,pkgs=[['regulatory','Regulatory Package','Complete legal and compliance documentation.'],['board','Board Package','Executive summary and risk posture.'],['evidence','Evidence Package','Evidence register, hashes and mappings.'],['audit','Audit Package','Audit trail, logs and traceability.'],['vendor','Vendor Due Diligence','Third-party and procurement review.']];let h='<div class="sw-overview"><section class="v25-export-head"><div class="v25-kicker">Package center</div><h2>Audience-specific enterprise exports</h2><div class="v25-small">Active system: '+esc(s.name)+' · '+count+' generated outputs across '+esc(ps.join(', '))+'.</div></section><div class="v25-package-grid">';pkgs.forEach(x=>h+='<button type="button" class="v25-package '+(selected===x[0]?'active':'')+'" data-v25-package="'+x[0]+'" data-system="'+esc(s.id)+'"><strong>'+x[1]+'</strong><div class="v25-small" style="margin-top:12px">'+x[2]+'</div></button>');h+='</div><section class="v25-format-box" style="margin-top:18px"><div class="v25-kicker">Available formats</div><div class="v25-actions">';if(selected==='regulatory')h+=button('One complete DOCX',s,'docx','complete',true)+button('Complete PDF',s,'pdf','complete')+button('Complete Regulatory ZIP',s,'zip','complete');if(selected==='board')h+=button('Board DOCX',s,'docx','board',true)+button('Board PDF',s,'pdf','board');if(selected==='evidence')h+=button('Evidence ZIP',s,'evidence-zip','evidence',true)+button('Evidence CSV',s,'evidence-csv','evidence')+button('Evidence JSON',s,'evidence-json','evidence');if(selected==='audit')h+=button('Audit ZIP',s,'audit-zip','audit',true)+button('Audit PDF',s,'audit-pdf','audit');if(selected==='vendor')h+=button('Vendor DOCX',s,'docx','vendor',true)+button('Vendor PDF',s,'pdf','vendor');return h+'</div></section></div>'};window.renderSWExports=window.renderSWExport;
-function slug(v){return String(v||'system').replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'').toLowerCase()}
+function slug(v){return String(v||'system').replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'').toLowerCase().slice(0,40).replace(/-+$/,'')||'system'}
 function download(blob,name){if(!(blob instanceof Blob)||blob.size<10)throw new Error('Generated file is empty.');const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),15000)}
 async function makeDocx(s,items,title){if(typeof docx==='undefined')throw new Error('DOCX library is unavailable.');const D=docx,{Document,Packer,Paragraph,TextRun,HeadingLevel,PageBreak,TableOfContents}=D,children=[new Paragraph({text:'EACE.ai',heading:HeadingLevel.TITLE}),new Paragraph({text:title,heading:HeadingLevel.HEADING_1}),new Paragraph({text:s.name||'AI System'}),new Paragraph({children:[new PageBreak()]})];if(TableOfContents){children.push(new Paragraph({text:'Table of Contents',heading:HeadingLevel.HEADING_1}),new TableOfContents('Contents',{hyperlink:true,headingStyleRange:'1-3'}),new Paragraph({children:[new PageBreak()]}))}let cur='';items.forEach(o=>{const p=promptOf(o);if(p!==cur){cur=p;children.push(new Paragraph({text:p+' — '+V25_LABELS[p],heading:HeadingLevel.HEADING_1}))}children.push(new Paragraph({text:String(o.code||o.outputId||'Document')+' — '+String(o.title||'Untitled'),heading:HeadingLevel.HEADING_2}));if(o.article)children.push(new Paragraph({children:[new TextRun({text:'Legal basis: '+o.article,bold:true})]}));String(o.content||'').split(/\n+/).filter(Boolean).forEach(t=>children.push(new Paragraph({text:t}))) });return Packer.toBlob(new Document({features:{updateFields:true},sections:[{children}]}))}
 async function exportFile(s,format,scope){bindSystem(s);let items=allOutputs(s),title='Complete Regulatory Documentation',suffix='complete';if(V25_PROMPTS.includes(scope)){items=allOutputs(s,scope);title=scope+' Complete Documentation';suffix=scope.toLowerCase()}else if(scope==='board'){const m=items.filter(o=>/executive|summary|risk|classification|final/i.test((o.code||'')+' '+(o.title||'')));items=m.length?m:items.slice(0,12);title='Board Package';suffix='board'}else if(scope==='vendor'){const m=items.filter(o=>/architecture|security|cyber|nis2|gdpr|processor|contract|supplier|vendor|quality|logging|audit/i.test((o.code||'')+' '+(o.title||'')));items=m.length?m:items;title='Vendor Due Diligence';suffix='vendor'}if(!items.length)throw new Error('No completed outputs are available.');if(format==='docx')return download(await makeDocx(s,items,title),'EACE-'+slug(s.name)+'-'+suffix+'.docx');if(format==='prompt-zip'){if(typeof JSZip==='undefined')throw new Error('ZIP library is unavailable.');const z=new JSZip(),f=z.folder('Individual_Outputs');z.file('00_'+scope+'_Complete_Documentation.docx',await makeDocx(s,items,title));items.forEach(o=>f.file(slug((o.code||'document')+'-'+(o.title||''))+'.md','# '+(o.code||'Document')+' — '+(o.title||'Untitled')+'\n\n'+o.content));z.file('manifest.json',JSON.stringify({systemId:s.id,prompt:scope,outputCount:items.length},null,2));return download(await z.generateAsync({type:'blob'}),'EACE-'+slug(s.name)+'-'+scope+'.zip')}if(format==='zip'){if(typeof JSZip==='undefined')throw new Error('ZIP library is unavailable.');const z=new JSZip(),folders={P1:'03_P1_Classification',P2A:'04_P2A_Provider',P2B:'05_P2B_Deployer',P3:'06_P3_Transparency',P4:'07_P4_Minimal_Risk'};z.folder('00_Executive').file('EACE-Complete-Regulatory-Documentation.docx',await makeDocx(s,items,title));z.folder('01_Organisation').file('organisation-profile.json',JSON.stringify((window.st&&st.organisation)||s.organisation||{},null,2));z.folder('02_Master_Profile').file('system-master-profile.json',JSON.stringify({id:s.id,name:s.name,data:s.data||{},profile:s.profile||{}},null,2));for(const p of completedPrompts(s)){const arr=allOutputs(s,p),f=z.folder(folders[p]);f.file('00_'+p+'_Complete_Documentation.docx',await makeDocx(s,arr,p+' Complete Documentation'));const ind=f.folder('Individual_Outputs');arr.forEach(o=>ind.file(slug((o.code||'document')+'-'+(o.title||''))+'.md','# '+(o.code||'Document')+' — '+(o.title||'Untitled')+'\n\n'+o.content));f.file('manifest.json',JSON.stringify({prompt:p,outputCount:arr.length},null,2))}z.folder('08_Evidence').file('evidence-register.json',JSON.stringify(s.evidence||[],null,2));z.folder('09_Audit').file('audit-trail.json',JSON.stringify(s.auditRecords||[],null,2));z.folder('10_Machine_Readable').file('complete-system.json',JSON.stringify({system:s,outputs:items},null,2));z.folder('11_Metadata').file('manifest.json',JSON.stringify({systemId:s.id,completedPrompts:completedPrompts(s),outputCount:items.length,generatedAt:new Date().toISOString()},null,2));z.file('README.txt','EACE.ai Complete Regulatory Package\nSystem: '+s.name+'\nCompleted prompts: '+completedPrompts(s).join(', ')+'\nOutputs: '+items.length);return download(await z.generateAsync({type:'blob'}),'EACE-'+slug(s.name)+'-regulatory-package.zip')}if(format==='evidence-json')return download(new Blob([JSON.stringify(s.evidence||[],null,2)],{type:'application/json'}),'EACE-'+slug(s.name)+'-evidence.json');if(format==='evidence-csv'){const e=s.evidence||[],csv=['id,title,type,article,status,date,hash'].concat(e.map(x=>[x.id,x.title,x.type,x.article,x.status,x.ts||x.date,x.hash].map(v=>'"'+String(v||'').replace(/"/g,'""')+'"').join(','))).join('\n');return download(new Blob([csv],{type:'text/csv'}),'EACE-'+slug(s.name)+'-evidence.csv')}if(format==='evidence-zip'||format==='audit-zip'){const z=new JSZip();if(format==='evidence-zip')z.file('evidence-register.json',JSON.stringify(s.evidence||[],null,2));else z.file('audit-trail.json',JSON.stringify(s.auditRecords||[],null,2));return download(await z.generateAsync({type:'blob'}),'EACE-'+slug(s.name)+'-'+(format==='evidence-zip'?'evidence':'audit')+'.zip')}if(format==='pdf'||format==='audit-pdf'){if(typeof exportSystemPDF!=='function')throw new Error('PDF renderer is unavailable.');bindSystem(s);return exportSystemPDF(s.id,format==='audit-pdf'?'annotated':'regulator')}throw new Error('Unsupported export format: '+format)}
@@ -50594,7 +50697,7 @@ const originals={
 const locks=new Set();
 
 function toast(msg,tone){try{if(typeof showToast==='function')showToast(msg,tone||'var(--green)')}catch(e){console.warn(e)}}
-function slug(v){return String(v||'system').replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').toLowerCase()||'system'}
+function slug(v){return String(v||'system').replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').toLowerCase().slice(0,40).replace(/-+$/,'')||'system'}
 function systemById(id){
   let s=null;
   try{if(typeof resolveExportSystem==='function')s=resolveExportSystem(id)}catch(e){}
@@ -50704,7 +50807,7 @@ console.info('[EACE] Central Export Service v39 active. Header JSON backup prese
 const P=['P1','P2A','P2B','P3','P4'];
 const AUDIT_KEY='eace_global_audit_v40';
 function toast(m,c){try{showToast(m,c||'var(--green)')}catch(e){console.log(m)}}
-function slug(v){return String(v||'system').replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').toLowerCase()||'system'}
+function slug(v){return String(v||'system').replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').toLowerCase().slice(0,40).replace(/-+$/,'')||'system'}
 function sys(id){try{return window.EACEExportService&&EACEExportService.systemById(id)}catch(e){};return (window.st&&st.systems||[]).find(x=>String(x.id)===String(id))||(window.sw&&sw.activeSystem)||null}
 function outputs(s,scope){return window.EACEExportService?EACEExportService.canonicalOutputs(s,scope):((s&&s.generatedOutputs)||[])}
 function prompt(o){try{return window.EACEExportService?EACEExportService.outputsByPrompt({generatedOutputs:[o]}):null}catch(e){};const x=String(o&&o.pillar||'').toUpperCase();return P.includes(x)?x:'OTHER'}
@@ -50884,7 +50987,7 @@ const PROMPTS=['P1','P2A','P2B','P3','P4'];
 const cache=new Map();
 const busy=new Set();
 function toast(msg,color){try{if(typeof showToast==='function')showToast(msg,color||'var(--gold)');}catch(e){console.info(msg)}}
-function slug(v){return String(v||'system').normalize('NFKD').replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'').toLowerCase()||'system'}
+function slug(v){return String(v||'system').normalize('NFKD').replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'').toLowerCase().slice(0,40).replace(/-+$/,'')||'system'}
 function systemOf(id){
  try{if(window.__eaceV32&&typeof __eaceV32.findSystem==='function'){const s=__eaceV32.findSystem(id);if(s)return s}}catch(e){}
  try{if(window.EACEExportService&&typeof EACEExportService.resolveSystem==='function'){const s=EACEExportService.resolveSystem(id);if(s)return s}}catch(e){}
@@ -51024,7 +51127,7 @@ console.info('[EACE] v43 evidence/audit export controls, control-character sanit
 const PROMPTS=['P1','P2A','P2B','P3','P4'];
 const activeJobs=new Map();
 function toast(m,c){try{showToast(m,c||'var(--gold)')}catch(e){console.info(m)}}
-function slug(v){return String(v||'eace').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').toLowerCase()||'eace'}
+function slug(v){return String(v||'eace').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').toLowerCase().slice(0,40).replace(/-+$/,'')||'eace'}
 function systemById(id){
   const wanted=String(id||'').trim();
   // 1) Use the application's canonical resolver. `st` and `sw` are lexical globals
@@ -51255,7 +51358,7 @@ const jobs=new Map();
 function toast(m,c){try{showToast(m,c||'var(--gold)')}catch(e){console.info(m)}}
 function progress(title,copy){try{EACEExportProgress.show(title,copy)}catch(e){}}
 function done(){try{EACEExportProgress.hide(true)}catch(e){}}
-function slug(v){return String(v||'eace').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').toLowerCase()||'eace'}
+function slug(v){return String(v||'eace').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').toLowerCase().slice(0,40).replace(/-+$/,'')||'eace'}
 function systems(){const a=[];try{if(typeof st!=='undefined'&&st&&Array.isArray(st.systems))a.push(...st.systems)}catch(e){}try{if(typeof WORKSPACE!=='undefined'&&WORKSPACE&&Array.isArray(WORKSPACE.systems))a.push(...WORKSPACE.systems)}catch(e){}try{if(window.eaceV25Systems&&window.eaceV25Systems.size)a.push(...window.eaceV25Systems.values())}catch(e){}return [...new Map(a.filter(Boolean).map(x=>[String(x.id),x])).values()]}
 function currentSystem(id){const wanted=String(id||'').trim();try{if(typeof resolveSystem==='function'){const r=resolveSystem(wanted||undefined);if(r)return r}}catch(e){}const all=systems();if(wanted){const f=all.find(x=>String(x.id)===wanted);if(f)return f}try{if(typeof sw!=='undefined'&&sw&&sw.activeSystem)return sw.activeSystem}catch(e){}const domId=document.querySelector('[data-system].active,[data-system][data-v32-export],[data-system][data-v47-export]')?.dataset?.system;if(domId){const f=all.find(x=>String(x.id)===String(domId));if(f)return f}let aid='';try{aid=(typeof st!=='undefined'&&st&&st.activeId)||(typeof WORKSPACE!=='undefined'&&WORKSPACE&&WORKSPACE.activeId)||''}catch(e){}return all.find(x=>String(x.id)===String(aid))||all.sort((a,b)=>outputs(b).length-outputs(a).length)[0]||null}
 function outputs(s,scope){let a=[];try{if(window.__eaceV42&&typeof __eaceV42.outputs==='function')a=__eaceV42.outputs(s,scope)||[]}catch(e){}if(!a.length){for(const k of ['generatedOutputs','outputs','documents','completedOutputs'])if(Array.isArray(s&&s[k]))a.push(...s[k])}const p=String(scope||'complete').toUpperCase().replace(/[-_\s]/g,'');if(PROMPTS.includes(p))a=a.filter(o=>String(o.promptId||o.pillar||o.prompt||o.engine||'').toUpperCase().replace(/[-_\s]/g,'')===p);return a.filter(o=>o&&String(o.content||o.text||o.body||'').trim())}
@@ -51378,7 +51481,7 @@ async function build(s,items,title){const C=J();if(!C)throw Error('PDF library i
  d.setFillColor(...COL.teal);d.rect(0,0,W,H,'F');d.setDrawColor(...COL.gold);d.line(42,82,W-42,82);d.line(42,H-92,W-42,H-92);font('bold',12,COL.gold);d.text('E A C E  ·  E U  A I  C O M P L I A N C E  E N G I N E',W/2,62,{align:'center'});font('bold',25,COL.white);let yy=205;for(const line of d.splitTextToSize(cl(title||'Complete Regulatory Documentation'),W-120)){d.text(line,W/2,yy,{align:'center'});yy+=31}font('normal',15,COL.white);yy+=24;for(const line of d.splitTextToSize(cl(s&&s.name||'AI System'),W-135)){d.text(line,W/2,yy,{align:'center'});yy+=21}font('bold',8.5,COL.gold);d.text('FROM CRISIS TO AUTHORITY™',W/2,H-115,{align:'center'});font('normal',7.5,[225,226,223]);d.text('CONFIDENTIAL · Human review required before regulatory use',W/2,H-67,{align:'center'});d.addPage();p=2;y=T;header();heading('Document Overview',1);table([['Document','System','Included prompts','Artefacts'],[title||'Complete Regulatory Documentation',s&&s.name||'AI System',[...new Set(items.map(po).filter(Boolean))].join(' · '),String(items.length)]]);page();
  for(const o of items){const q=po(o);if(q&&q!==cur){cur=q;heading(q+' — '+({P1:'AI System Classification',P2A:'Provider Obligations',P2B:'Deployer Obligations',P3:'Transparency Documentation',P4:'Minimal-Risk Documentation'}[q]||'Documentation'),1)}heading(cl(o.code||o.outputId||'Document')+(o.title?' — '+cl(o.title):''),2);if(o.article||o.legalBasis)call('Legal basis: '+cl(o.article||o.legalBasis),'LEGAL');for(const b of parse(o.content||o.text||o.body||'')){if(b.k==='h')heading(b.v,b.l);else if(b.k==='table')table(b.rows);else if(b.k==='li')list(b.v,b.m);else if(b.k==='call')call(b.v);else if(b.k==='rule'){need(12);d.setDrawColor(...COL.line);d.line(L,y,W-R,y);y+=12}else para(b.v)}y+=9}footer();return new Blob([d.output('arraybuffer')],{type:'application/pdf'})}
  function dl(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1800);return blob}
- function slug(v){return cl(v).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'ai-system'}
+ function slug(v){return (cl(v).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40).replace(/-+$/,''))||'ai-system'}
  async function force(id,scope){const s=sys(id);if(!s)throw Error('No active system.');scope=scope||'complete';const it=outs(s,scope);if(!it.length)throw Error('No completed outputs are available.');window.EACEExportProgress&&EACEExportProgress.show('Preparing PDF','Formatting the complete document in EACE style. Please keep this window open.');await new Promise(r=>setTimeout(r,40));const activeBuild=window.buildPdf||build;try{return dl(await activeBuild(s,it,scope==='complete'?'Complete Regulatory Documentation':String(scope).toUpperCase()+' Complete Documentation'),'EACE-'+slug(s.name)+'-'+String(scope).toLowerCase()+'-regulatory-documentation.pdf')}finally{window.EACEExportProgress&&EACEExportProgress.hide()}}
  window.__eaceV53={buildPdf:build,forceExport:force};window.buildPdf=build;if(window.__eaceV32)__eaceV32.buildPdf=build;if(window.__eaceV47)__eaceV47.makePdf=build;
  const oldFile=window.exportFile;window.exportFile=async function(s,f,scope){if(String(f).toLowerCase()==='pdf')return force(s&&s.id,scope);return oldFile&&oldFile.apply(this,arguments)};
