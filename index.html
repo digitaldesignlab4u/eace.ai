@@ -6344,8 +6344,8 @@ window.addEventListener('beforeunload',(e)=>{
   const unsaved = typeof EACE_AUTOSAVE!=='undefined' && EACE_AUTOSAVE && EACE_AUTOSAVE.dirty;
   if(!generating && !unsaved) return;
   const msg = generating
-    ? 'A regulatory document is still being generated. The output in progress has not finished — completed outputs are already saved, but leaving now will interrupt this one.'
-    : 'You have unsaved changes that have not finished autosaving yet.';
+    ? 'Generation is still in progress. Please wait for it to finish, or export your files, before closing this tab.'
+    : 'This tab has unsaved changes that have not finished saving. Please export your files before closing.';
   e.preventDefault();
   e.returnValue = msg;
   return msg;
@@ -6713,9 +6713,21 @@ async function execRun(){
       return;
     }
     exec.currentIdx=idx;
+    // A laptop/device sleep-resume cycle can leave the underlying TCP socket
+    // dead without the fetch() promise ever rejecting on its own -- neither
+    // browsers nor the Anthropic API guarantee a timeout for a stalled
+    // connection. Without an explicit deadline, the await below can hang
+    // indefinitely, and since exec.aborted is only checked at the TOP of
+    // this loop (not while a request is in flight), clicking Abort couldn't
+    // do anything either -- it set a flag nothing was left to read. Give
+    // every request both a hard timeout and a live AbortController so Abort
+    // actually cancels the in-flight call instead of just hiding the overlay.
+    const _reqController=new AbortController();
+    const _reqTimeoutId=setTimeout(()=>{ try{ _reqController.abort(); }catch(e){} },180000);
+    exec.currentAbortController=_reqController;
     try{
       if(st.claudeMode) await execClaudeMode(idx);
-      else if(st.apiKey) await execApiMode(idx);
+      else if(st.apiKey) await execApiMode(idx,_reqController.signal);
       else throw new Error('Real generation is not configured. Add an API key or use Manual Claude mode.');
     }catch(err){
       out.state='error';
@@ -6731,6 +6743,9 @@ async function execRun(){
       if(txt) txt.textContent=`${out.code} stopped. Completed outputs are preserved. Retry only this output, then continue sequentially.`;
       renderExecList(); updateExecProgress(); updateCheckpointButton(); saveExecState();
       return;
+    }finally{
+      clearTimeout(_reqTimeoutId);
+      exec.currentAbortController=null;
     }
     // Legacy-stable rule: a successful, non-empty Anthropic response is an
     // atomic completed output. Do not stop the run because of page targets,
@@ -7729,6 +7744,13 @@ function execAbort(){
   if(!confirm('Stop generation? Completed outputs and the current checkpoint will be preserved.')) return;
   exec.aborted = true;
   exec.paused  = false;
+  // exec.aborted is only checked between outputs, at the top of the run
+  // loop -- it does nothing while a request is actually in flight. Cancel
+  // that request directly so Abort takes effect immediately instead of only
+  // hiding the overlay while the stuck call keeps running underneath it
+  // (this is also what recovers a request left hanging by a laptop sleep
+  // cycle, since the same controller is on a hard timeout either way).
+  try{ if(exec.currentAbortController) exec.currentAbortController.abort(); }catch(e){}
   saveExecState();
   const overlay   = document.getElementById('exec-overlay');
   const cpOverlay = document.getElementById('claude-paste-overlay');
