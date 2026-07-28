@@ -4444,6 +4444,75 @@ function buildClassificationDecisionRecordData(sys){
   });
 }
 
+// ── PER-PILLAR KEY REGULATORY INDICATORS ──
+// Every pillar section in the export must open with a visible answer to its
+// own core question (P1: is the system in scope, and what class; P2A/P2B: why
+// this engine was triggered and the actor-establishment/data facts that shape
+// it; P3: which Art. 50 triggers actually apply; P4: whether minimal-risk
+// status is confirmed) instead of the reader having to infer it from prose
+// buried inside the individual outputs. Everything here is either the
+// existing authoritative P1 result, a directly-verified fact field, or a
+// mechanical count of [INPUT REQUIRED]/[OFFICIAL SOURCE VERIFICATION
+// REQUIRED] markers in that pillar's own generated content — nothing is
+// invented for a pillar this function doesn't have real data for.
+function buildPillarStatusIndicators(sys, pillar){
+  const auth = getAuthoritativeP1Result(sys);
+  const d = (sys && sys.data) || {};
+  const pillarContent = (Array.isArray(sys && sys.generatedOutputs)?sys.generatedOutputs:[])
+    .filter(o=>o.pillar===pillar).map(o=>String(o.content||'')).join('\n');
+  const inputRequired = (pillarContent.match(/\[(?:INPUT REQUIRED|NOT PROVIDED)[^\]]*\]/g)||[]).length;
+  const verificationRequired = (pillarContent.match(/\[OFFICIAL SOURCE VERIFICATION REQUIRED[^\]]*\]|\[FETCH FAILED[^\]]*\]/g)||[]).length;
+  const docCompleteness = {label:'Documentation completeness', value: inputRequired ? inputRequired+' field(s) marked [INPUT REQUIRED] / [NOT PROVIDED]' : 'No outstanding input gaps identified'};
+  const verificationIndicator = {label:'Official source verification', value: verificationRequired ? verificationRequired+' item(s) require verification' : 'No pending source-verification markers'};
+
+  if(pillar==='P1'){
+    const dash = buildExecutiveClassificationDashboardData(sys);
+    if(!dash.available) return [{label:'AI Act Scope', value:'Not yet determined — P1 classification in progress'}];
+    return [
+      {label:'AI Act Scope', value:dash.aiActScope},
+      {label:'Classification', value:dash.highRiskStatus},
+      {label:'Legal Route', value:dash.legalRoute},
+      docCompleteness, verificationIndicator,
+    ];
+  }
+  if(pillar==='P2A'){
+    const trigger = !auth ? 'P1 classification not yet completed'
+      : auth.legalRoute==='article-6-1-annex-i' ? 'HIGH-RISK (Annex I — Art. 6(1))'
+      : auth.legalRoute==='article-6-2-annex-iii' ? 'HIGH-RISK (Annex III — Art. 6(2))'
+      : 'Not a high-risk route — provider engine run outside its default trigger, verify basis';
+    const establishment = d.euEstablished===true?'EU/EEA established'
+      : d.euEstablished===false?'Non-EU — Art. 22 EU Authorised Representative required'
+      : 'Not yet confirmed';
+    return [{label:'Engine trigger', value:trigger}, {label:'Provider establishment', value:establishment}, docCompleteness, verificationIndicator];
+  }
+  if(pillar==='P2B'){
+    const trigger = !auth ? 'P1 classification not yet completed'
+      : auth.classification!=='high-risk' ? 'Not a high-risk route — deployer engine run outside its default trigger, verify basis'
+      : auth.legalRoute==='article-6-1-annex-i' ? 'HIGH-RISK (Annex I — Art. 6(1))'
+      : 'HIGH-RISK (Annex III — Art. 6(2))';
+    const personalData = d.personalData===true?'Yes — GDPR/FRIA analysis applies'
+      : d.personalData===false?'No'
+      : 'Not yet confirmed';
+    return [{label:'Engine trigger', value:trigger}, {label:'Personal data processing', value:personalData}, docCompleteness, verificationIndicator];
+  }
+  if(pillar==='P3'){
+    const triggers=[];
+    if(d.r50Interacts===true) triggers.push('Art. 50(1) — direct interaction');
+    if(d.r50Emotion===true) triggers.push('Art. 50(3) — emotion recognition');
+    if(d.r50Biometric===true) triggers.push('Art. 50(3) — biometric categorisation');
+    if(d.r50Synthetic===true) triggers.push('Art. 50(4) — synthetic/deepfake content');
+    if(d.gpai===true||d.gpaiDependency===true) triggers.push('Art. 50(1) — GPAI dependency');
+    return [{label:'Applicable Art. 50 triggers', value: triggers.length?triggers.join('; '):'None confirmed on the current facts — verify inputs'}, docCompleteness, verificationIndicator];
+  }
+  if(pillar==='P4'){
+    const status = !auth ? 'P1 classification not yet completed'
+      : auth.legalRoute==='outside-high-and-limited-risk' ? 'Minimal risk confirmed (Art. 95)'
+      : 'Engine run outside its default minimal-risk trigger — verify basis';
+    return [{label:'Minimal-risk status', value:status}, docCompleteness, verificationIndicator];
+  }
+  return [docCompleteness, verificationIndicator];
+}
+
 function provisionalClass(){
   const d=st.data,p=st.pillar;
   const PROVISIONAL_LABEL='Preliminary screening only — not a P1 classification result.';
@@ -50605,7 +50674,15 @@ async function buildDocx(system,items,title){
    new D.TextRun({text:String(pillarPh.A),color:CAT_COLOR_DOCX.A,bold:true,font:'Arial',size:16}),
    new D.TextRun({text:' of '+pillarPhTotal+' outstanding fields require direct user input · '+pillarPh.B+' internal-system reference · '+pillarPh.C+' source verification',color:'6B6B63',font:'Arial',size:16}),
   ],{spacing:{after:200}}):null;
-  return [kpiRow,para('',{spacing:{after:80}}),barRow,caption].concat(phCaption?[phCaption]:[]);
+  // Key Regulatory Indicators — the substantive answer for this pillar (in
+  // scope? what class? why was this engine triggered?), not just how many
+  // documents are done. See buildPillarStatusIndicators for the data source.
+  const indicators=buildPillarStatusIndicators(system,pillar);
+  const indicatorNodes=indicators.length?[
+   para(inlineRuns(D,'Key Regulatory Indicators',{font:'Georgia',size:16,color:teal,bold:true}),{spacing:{before:60,after:60}}),
+   ...indicators.flatMap(ind=>[table([[ind.label,String(ind.value==null?'':ind.value)]]),para('',{spacing:{after:60}})]),
+  ]:[];
+  return [kpiRow,para('',{spacing:{after:80}}),barRow,caption].concat(phCaption?[phCaption]:[]).concat(indicatorNodes);
  }
  // ── Executive Classification Dashboard (data-only, no AI call) — the
  // authoritative one-page visual representation of the completed P1
@@ -52087,6 +52164,14 @@ async function buildPdf(system,items,title){
    font('normal',7.5,C.muted);d.text(' of '+phTotal+' outstanding fields require direct user input · '+ph.B+' internal-system reference · '+ph.C+' source verification',L+w1,top+124);
   }
   y=top+dashH;
+  // Key Regulatory Indicators — the substantive answer for this pillar (in
+  // scope? what class? why was this engine triggered?), not just how many
+  // documents are done. See buildPillarStatusIndicators for the data source.
+  const indicators=buildPillarStatusIndicators(system,pillar);
+  if(indicators.length){
+   heading('Key Regulatory Indicators',3);
+   indicators.forEach(ind=>table([[ind.label,String(ind.value==null?'':ind.value)]]));
+  }
  }
  // ── Executive Classification Dashboard (data-only, no AI call) — the
  // authoritative one-page visual representation of the completed P1
