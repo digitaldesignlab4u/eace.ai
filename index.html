@@ -4390,6 +4390,60 @@ function buildExecutiveClassificationDashboardData(sys){
   };
 }
 
+// ── STRUCTURAL LINE CLASSIFIER — Facts / Legal Test / Analysis / Conclusion /
+// Evidence separation ──
+// Detects the mandatory machine-readable labels required by the P1 governance
+// layer's "MACHINE-READABLE LABELLING" rule (buildGlobalRegulatoryGovernance,
+// P1 structural section). Operates on already-markdown-stripped paragraph text
+// (both export renderers strip **bold**/`code`/etc before this runs), so a
+// plain "Label: text" prefix is all that needs to be matched. Returns null for
+// any paragraph that doesn't start with one of these exact labels — ordinary
+// prose is left untouched, this never rewrites or hides content.
+function classifyP1StructuralLine(raw){
+  const text = String(raw||'');
+  const m = text.match(/^(Facts|Legal Test|Analysis|Conclusion|Evidence|Legal Route|Residual legal uncertainty)\s*:\s*/i);
+  if(!m) return null;
+  const KIND_LABEL = {
+    facts:'FACTS', legaltest:'LEGAL TEST', analysis:'ANALYSIS', conclusion:'CONCLUSION',
+    evidence:'EVIDENCE', legalroute:'LEGAL ROUTE', residuallegaluncertainty:'RESIDUAL LEGAL RISK',
+  };
+  const key = m[1].toLowerCase().replace(/\s+/g,'');
+  const label = KIND_LABEL[key];
+  if(!label) return null;
+  return {kind:key, label, text:text.slice(m[0].length).trim()};
+}
+
+// ── CLASSIFICATION DECISION RECORD — the full, granular authoritative record ──
+// Distinct from the Executive Classification Dashboard (a one-page at-a-glance
+// cockpit): this is the complete, citable record an auditor or notified body
+// would reference — every field mechanically derived from the same
+// authoritative P1 result and generated output content, never invented.
+function buildClassificationDecisionRecordData(sys){
+  const dash = buildExecutiveClassificationDashboardData(sys);
+  if(!dash.available) return dash;
+  const auth = getAuthoritativeP1Result(sys);
+  const legalBasis = auth.legalBasis||[];
+  const article = legalBasis.find(x=>/^article/i.test(x)) || legalBasis[0] || '[NOT PROVIDED]';
+  const annex = legalBasis.find(x=>/annex/i.test(x))
+    || (auth.annexIIIReference ? 'Annex III — '+auth.annexIIIReference
+        : (auth.legalRoute==='article-6-1-annex-i' ? 'Annex I — '+((auth.annexIProductLegislation||[]).join('; ')||'[NOT PROVIDED]') : '—'));
+
+  const p1Content = (Array.isArray(sys.generatedOutputs)?sys.generatedOutputs:[])
+    .filter(o=>o.pillar==='P1').map(o=>String(o.content||''));
+  const remainingUncertainties=[];
+  p1Content.forEach(c=>{ (c.match(/\[(?:INPUT REQUIRED|NOT PROVIDED)[^\]]*\]/g)||[]).forEach(m=>remainingUncertainties.push(m)); });
+  const officialVerificationRequired=[];
+  p1Content.forEach(c=>{ (c.match(/\[OFFICIAL SOURCE VERIFICATION REQUIRED[^\]]*\]|\[FETCH FAILED[^\]]*\]/g)||[]).forEach(m=>officialVerificationRequired.push(m)); });
+
+  return Object.assign({}, dash, {
+    article, annex,
+    reasoning: auth.rationale || '[NOT PROVIDED]',
+    evidence: dash.confidence.factsUsed+' of '+dash.confidence.factsTotal+' classification facts on record. Legal basis: '+(legalBasis.join(', ')||'[NOT PROVIDED]')+'.',
+    remainingUncertainties: remainingUncertainties.length ? remainingUncertainties.slice(0,25) : ['None identified in the generated P1 documentation.'],
+    officialVerificationRequired: officialVerificationRequired.length ? officialVerificationRequired.slice(0,25) : ['None identified in the generated P1 documentation.'],
+  });
+}
+
 function provisionalClass(){
   const d=st.data,p=st.pillar;
   const PROVISIONAL_LABEL='Preliminary screening only — not a P1 classification result.';
@@ -7240,7 +7294,7 @@ function buildGlobalRegulatoryGovernance(pillar){
     ? `P1 CLASSIFICATION METHOD — MANDATORY ORDER:\n(a) identify the AI system and intended purpose; (b) determine territorial, personal, material and temporal scope; (c) test every applicable Article 2 exclusion; (d) test Article 5 prohibited practices before any high-risk analysis — Article 5(1) currently contains TEN prohibited-practice categories following Regulation (EU) 2026/1744 (Digital Omnibus on AI): the eight original points (a)-(h) plus two categories inserted by that Regulation at points (ba) and (bb) — (ba) placing on the market, putting into service or using an AI system that generates or manipulates realistic non-consensual intimate imagery/audio/video of an identifiable natural person without that person's free, specific, informed, unambiguous and explicit consent, and (bb) placing on the market, putting into service or using an AI system that generates or manipulates child sexual abuse material, except where a "without right" defence applies under national law transposing Directive 2011/93/EU; test all ten elements — do not rely on a pre-Omnibus recollection of only eight prohibited practices; (e1) test Article 6(2) and Annex III point by point, element by element — this is the USE-CASE high-risk route; (e2) independently and separately test Article 6(1) and Annex I — whether the system is itself, or is a safety component of, a product covered by the Union harmonisation legislation listed in Annex I — this is the PRODUCT/SAFETY-COMPONENT high-risk route and is analytically INDEPENDENT of (e1): a system can qualify under Annex I only, Annex III only, both, or neither, and the two tests must never be merged, averaged, or reported as a single combined "tri-state" result; (f) test Article 6(3) only where legally available and only against an Annex III result from (e1) — Article 6(3) has no application to the Annex I route under (e2); (g) determine each actor role separately; (h) determine GPAI dependency and systemic-risk status (Art. 51-55) as a THIRD, ALSO-INDEPENDENT track — never fold the GPAI/systemic-risk assessment into the Annex I test under (e2), and never describe or label the GPAI assessment as "Annex II": Annex II of the Regulation is the list of criminal offences referenced only by Annex III point 6 (law enforcement) and has no relationship whatsoever to GPAI models; (i) determine Article 50, GDPR/ePrivacy and sectoral consequences; (j) issue one internally consistent Classification Record with exact provisions and no alternative Annex point.\n\nMANDATORY TERMINOLOGY — HIGH-RISK LABELLING: the bare, unqualified word "high-risk" must never be used as a final classification label in any P1 output, heading, table cell, traffic-light summary, checklist row or routing statement. Every use of "high-risk" as a classification result must be immediately qualified with its exact legal route, in one of these two forms only: "HIGH-RISK (Annex I — Art. 6(1))" for the product/safety-component route, together with the specific Annex I harmonisation legislation identified; or "HIGH-RISK (Annex III — Art. 6(2), Point [X])" for the use-case route, together with the exact Annex III point and sub-point. If a system qualifies under both routes, state both labels explicitly and never collapse them into one. If the Article 6(3) exception applies, state "NOT HIGH-RISK (Art. 6(3) exception applies to the Annex III route)" and note explicitly that this exception cannot affect an independent Annex I result. GPAI dependency and GPAI systemic-risk status are never described using the word "high-risk" — they are a separate track with its own terminology (GPAI dependency: YES/NO; systemic-risk designation: YES/NO/PENDING AI OFFICE DESIGNATION).\n\nLEGAL ROUTE TAGGING — MANDATORY FOR EVERY ROUTING OR "NEXT STEP" STATEMENT: any statement that routes the system to a downstream output, module, prompt or specific next action (including the Traffic Light summary, the Compliance Checklist, the Routing Decision output, and any cross-reference such as "proceed to Output X") must be accompanied by an explicit, structured Legal Route block rather than a bare "proceed to" instruction, in this exact form:\nLegal Route: Article 6(1) + Annex I — [name of the Annex I harmonisation legislation]\nor: Legal Route: Article 6(2) + Annex III — Point [X] — [exact point description]\nor: Legal Route: Article 6(3) exception applies — Annex III route only, GPAI/systemic-risk track unaffected\nor: Legal Route: No high-risk route identified — [basis]\nThis Legal Route block must appear before or alongside every "Proceed to Output/Prompt X" instruction so a reader never has to infer the underlying legal basis for a routing decision from the routing table alone.`
     : `CLASSIFICATION CONTROL — MANDATORY:\nWhere a P1 Classification Record exists, it is the controlling baseline. Reproduce its exact risk class, actor roles, Article 5 result and Annex point where relevant — including whether the route is Article 6(1)/Annex I or Article 6(2)/Annex III, which must be reproduced exactly and never merged or restated as an unqualified "high-risk" label; do not create an alternative classification or select a "closest" Annex point. Where execution was explicitly opened without a current P1 run, use only the recorded user-confirmed or externally established classification basis contained in the Classification Control Record. Identify that basis transparently, validate applicability to the current artefact using P1-style element-by-element reasoning, and mark any indispensable missing element [INPUT REQUIRED]. Never silently infer or invent an Annex point. A downstream module may proceed conditionally without P1, but it may not conceal the absence or weakness of the classification anchor.`;
 
-  const p1StructuralRules = pillar==='P1' ? `\n\n10. P1 STRUCTURED ANALYSIS FORMAT — MANDATORY FOR EVERY SUBSTANTIVE P1 DETERMINATION\nFACTS / LEGAL TEST / ANALYSIS / CONCLUSION / EVIDENCE: every substantive classification determination (territorial scope, each Art. 5 point, each Annex III point, the Annex I test, the Art. 6(3) test, GPAI dependency, each Art. 50 trigger) must be structured in this exact sequence, not as an undifferentiated "Assessment"/"Analysis"/"Conclusion" block: Facts (the specific, user-supplied or verified inputs relied upon — cite the field, not a paraphrase) → Legal Test (the exact element(s) of the applicable Article/Annex provision being applied) → Analysis (how the facts satisfy or fail each element of the test) → Conclusion (the determination, using the mandatory high-risk terminology in Section 4 where applicable) → Evidence (the artefact or record that substantiates the conclusion, or [REQUIRED / NOT PROVIDED]). Do not skip Facts and jump directly to Analysis; do not state a Conclusion without a preceding Legal Test.\n\nRECITAL CITATIONS: for any determination that turns on legislative purpose, interpretive intent, or a term not self-explanatory from the Article text alone (e.g. "significant risk of harm", "narrow procedural task", "safety component", "profiling"), cite the supporting Recital alongside the Article, in the form "Recital [N] · Article [X]". Do not cite a Recital for a purely mechanical/factual determination (e.g. counting deployment countries) where no interpretive question arises.\n\nFACT-CONFIDENCE VOCABULARY — MANDATORY, REPLACES A GENERIC "USER SUPPLIED" LABEL: label every fact relied upon in a determination with exactly one of these five states: CONFIRMED (independently verifiable against an official register, standard or published legal text supplied in this execution); OFFICIALLY VERIFIED (checked against Tier 0-2 source material in this session); DECLARED (asserted by the user in the Master Profile, not independently verifiable within this execution); ASSUMED (inferred or derived by the Engine from other declared facts, not directly stated by the user — state the inference); EVIDENCE PENDING (a fact required for a complete determination that has not yet been supplied — do not guess it).\n\nLEGAL CONFIDENCE SCORING: for every material classification determination (territorial scope, each Annex III point evaluated YES/PARTIAL, the Annex I qualification, the Art. 6(3) exception, GPAI dependency), state a Legal Confidence figure as a percentage with a qualitative band and the single dominant reason, in the form: "[Determination name]: [XX]% — [High/Medium/Low] confidence — [reason, e.g. 'all four Art. 6(3) conditions independently confirmed' or 'pending notified body confirmation of Annex I product category']". Confidence must reflect genuine legal/factual certainty — do not default every determination to a high percentage; a determination made on DECLARED or ASSUMED facts, or turning on an unsettled interpretive question, must show materially lower confidence than one made on CONFIRMED facts and settled law.\n\nRESIDUAL LEGAL RISK: after each major determination, state a Residual Legal Risk line: "Residual legal uncertainty: [Low/Medium/High] — [the specific remaining question, e.g. pending harmonised standard, undecided national implementation, or a fact marked EVIDENCE PENDING]." Omit only where there is genuinely no remaining uncertainty (state "None identified" rather than silently omitting the line).\n\nSTRUCTURED FINDINGS: where an output enumerates individual findings (e.g. the Annex III point-by-point evaluation, the Art. 5 point-by-point evaluation), each finding must include, in order: Finding (the YES/NO/PARTIAL result) → Legal consequence (what follows from this specific finding) → Next module (which output, prompt or downstream engine this finding feeds, using the Legal Route tagging format in Section 4 where the finding affects classification) → Evidence generated (the record created by this finding, or [REQUIRED / NOT PROVIDED]). A finding without its consequence, routing and evidence reference is incomplete.` : '';
+  const p1StructuralRules = pillar==='P1' ? `\n\n10. P1 STRUCTURED ANALYSIS FORMAT — MANDATORY FOR EVERY SUBSTANTIVE P1 DETERMINATION\nFACTS / LEGAL TEST / ANALYSIS / CONCLUSION / EVIDENCE: every substantive classification determination (territorial scope, each Art. 5 point, each Annex III point, the Annex I test, the Art. 6(3) test, GPAI dependency, each Art. 50 trigger) must be structured in this exact sequence, not as an undifferentiated "Assessment"/"Analysis"/"Conclusion" block: Facts (the specific, user-supplied or verified inputs relied upon — cite the field, not a paraphrase) → Legal Test (the exact element(s) of the applicable Article/Annex provision being applied) → Analysis (how the facts satisfy or fail each element of the test) → Conclusion (the determination, using the mandatory high-risk terminology in Section 4 where applicable) → Evidence (the artefact or record that substantiates the conclusion, or [REQUIRED / NOT PROVIDED]). Do not skip Facts and jump directly to Analysis; do not state a Conclusion without a preceding Legal Test.\n\nRECITAL CITATIONS: for any determination that turns on legislative purpose, interpretive intent, or a term not self-explanatory from the Article text alone (e.g. "significant risk of harm", "narrow procedural task", "safety component", "profiling"), cite the supporting Recital alongside the Article, in the form "Recital [N] · Article [X]". Do not cite a Recital for a purely mechanical/factual determination (e.g. counting deployment countries) where no interpretive question arises.\n\nFACT-CONFIDENCE VOCABULARY — MANDATORY, REPLACES A GENERIC "USER SUPPLIED" LABEL: label every fact relied upon in a determination with exactly one of these five states: CONFIRMED (independently verifiable against an official register, standard or published legal text supplied in this execution); OFFICIALLY VERIFIED (checked against Tier 0-2 source material in this session); DECLARED (asserted by the user in the Master Profile, not independently verifiable within this execution); ASSUMED (inferred or derived by the Engine from other declared facts, not directly stated by the user — state the inference); EVIDENCE PENDING (a fact required for a complete determination that has not yet been supplied — do not guess it).\n\nLEGAL CONFIDENCE SCORING: for every material classification determination (territorial scope, each Annex III point evaluated YES/PARTIAL, the Annex I qualification, the Art. 6(3) exception, GPAI dependency), state a Legal Confidence figure as a percentage with a qualitative band and the single dominant reason, in the form: "[Determination name]: [XX]% — [High/Medium/Low] confidence — [reason, e.g. 'all four Art. 6(3) conditions independently confirmed' or 'pending notified body confirmation of Annex I product category']". Confidence must reflect genuine legal/factual certainty — do not default every determination to a high percentage; a determination made on DECLARED or ASSUMED facts, or turning on an unsettled interpretive question, must show materially lower confidence than one made on CONFIRMED facts and settled law.\n\nRESIDUAL LEGAL RISK: after each major determination, state a Residual Legal Risk line: "Residual legal uncertainty: [Low/Medium/High] — [the specific remaining question, e.g. pending harmonised standard, undecided national implementation, or a fact marked EVIDENCE PENDING]." Omit only where there is genuinely no remaining uncertainty (state "None identified" rather than silently omitting the line).\n\nSTRUCTURED FINDINGS: where an output enumerates individual findings (e.g. the Annex III point-by-point evaluation, the Art. 5 point-by-point evaluation), each finding must include, in order: Finding (the YES/NO/PARTIAL result) → Legal consequence (what follows from this specific finding) → Next module (which output, prompt or downstream engine this finding feeds, using the Legal Route tagging format in Section 4 where the finding affects classification) → Evidence generated (the record created by this finding, or [REQUIRED / NOT PROVIDED]). A finding without its consequence, routing and evidence reference is incomplete.\n\nMACHINE-READABLE LABELLING — MANDATORY FORMAT: every Facts / Legal Test / Analysis / Conclusion / Evidence element above, and every Legal Route and Residual legal uncertainty line, must begin its own paragraph with the literal label word followed by a colon and a space — e.g. "Facts: ..." / "Legal Test: ..." / "Analysis: ..." / "Conclusion: ..." / "Evidence: ..." / "Legal Route: ..." / "Residual legal uncertainty: ...". Do not bury the label mid-sentence, rename it, translate it, or merge two labelled elements into one paragraph. This exact, predictable placement is what allows the export renderer to visually separate facts, legal analysis and the final regulatory decision in the delivered document — a merged or reworded label breaks that separation.` : '';
 
   return `===== EACE GLOBAL REGULATORY GOVERNANCE — OVERRIDES ALL CONFLICTING OUTPUT INSTRUCTIONS =====\nREGULATORY CUT-OFF DATE: ${cutOff}\n\n1. SOURCE GOVERNANCE — AUTHORITATIVE HIERARCHY\nTIER 0 — BINDING GROUND TRUTH: the text published in the Official Journal of the European Union; officially promulgated national legislation; and OJ corrigenda. An EUR-Lex consolidated version may be used only as an official access and research aid and must be identified as informative/non-binding where that distinction matters. Cite the legal act, article, paragraph, annex and OJ status — never cite "EUR-Lex" as the legal authority.\nTIER 1 — ADOPTED SECONDARY LAW: officially adopted and published delegated acts, implementing acts, amendments, corrigenda and OJ notices of harmonised standards. They are binding only according to their legal status and application date.\nTIER 2 — OFFICIAL GUIDANCE: published material of the European Commission, European AI Office, EDPB, EDPS, ENISA and competent national authorities. Treat it as official but non-binding interpretation unless the instrument itself has binding legal effect. Drafts, consultations, announced measures and work in preparation may be mentioned only as PENDING / NOT YET ADOPTED and may not alter the binding analysis.\nTIER 3 — STANDARDS: cite an ISO/IEC/CEN/CENELEC standard only by verified identifier, title, scope and official status unless the licensed normative text was expressly supplied in the input or attachment. Never reconstruct, quote, invent or attribute clause-level requirements from parametric knowledge. A draft standard is PENDING, not a compliance requirement.\nTIER 4 — CASE LAW: use only officially published judgments or orders from the CJEU, General Court, ECtHR or a relevant national court. Identify court, case number, date and proposition actually supported.\nEXCLUDED AS LEGAL AUTHORITY: law-firm or consultancy content, commercial explainers, SEO summaries, blogs, Wikipedia, Medium, LinkedIn, social media, GitHub commentary, vendor marketing, and uncited model memory. They must not establish, modify or prove a legal obligation.\n\n2. NO FALSE VERIFICATION\nThis local execution has no autonomous legal-research or browsing tool. Do not claim that a source, authority, signatory status, national designation, standard, guidance or amendment was "fetched", "verified", "current" or "confirmed" unless its official text/status is contained in the supplied canonical material, user input or attachment. Otherwise use [OFFICIAL SOURCE VERIFICATION REQUIRED] and do not guess.\n\n3. LEGAL CITATION AND PROPOSITION CONTROL\nEvery distinct statement of a binding obligation, prohibition, deadline, actor duty, legal consequence or conformity requirement must identify the exact legal act and applicable Article/paragraph/Annex. The citation must support the proposition actually made. Preserve differences between provisions: Article 15 is not Article 65; Article 25 (responsibilities along the AI value chain) is not Article 26 (deployer obligations); Article 72 (post-market monitoring) is not Article 73 (serious-incident reporting); Article 27 governs FRIA; Article 50 governs transparency duties. Never merge provisions merely because they belong to the same Regulation.\n\n4. ${classificationMode}\nCLASSIFICATION CONTROL RECORD:\n${buildClassificationControlRecord(pillar)}\n\n5. NO FABRICATED FACTS OR IDENTITIES\nNever invent or autocomplete a natural person's name, surname, job title, email address, telephone number, signature, organisation, authority, notified body, address, URL, registration number, contract number, incident, case reference, certificate, certification status, audit event, date, approval or source status. Use an identity/contact only where explicitly supplied by the user or authoritative attachment, and label it as USER-SUPPLIED where verification matters. Otherwise use [INPUT REQUIRED: precise field] or [NOT PROVIDED]. Plausible examples are prohibited in final artefacts.\n\n6. OPERATIONAL-LEGAL ARTEFACT RULE\nP1 is analytical classification and routing. P2A, P2B, P3 and P4 outputs are operational-legal artefacts: they must combine exact legal basis with executable governance, assigned roles (role labels rather than invented people), procedures, decision criteria, workflows, controls, records, templates, evidence requirements, escalation and review. A legal essay without executable content is incomplete; an operational procedure without a correct legal basis is incomplete.\n\n7. EVIDENCE AND PROVENANCE\nEvidence statements must use a controlled chain: Official legal source/status → exact requirement → user-supplied input or verified record → assessment → required evidence artefact → output reference. Do not extract a random sentence as a legal consequence. Do not describe an item as evidence unless it exists or is explicitly marked REQUIRED / NOT PROVIDED.\n\n8. EU/EEA CROSS-BORDER OVERLAY CONTROL
 Where the system is intended for deployment, provision or use in more than one EU Member State or EEA jurisdiction, distinguish the common EU legal baseline from jurisdiction-specific implementation, enforcement, sectoral and procedural overlays. For the dedicated National Overlays artefact, produce: (a) an EU/EEA National Overlay Matrix covering only jurisdictions identified in the user input; (b) a Conflict-of-Laws and Regulatory Interaction Matrix; (c) a Regulatory Heat Map by legal issue and jurisdiction; (d) a verified-practice register limited to officially published court, DPA, competent-authority, EDPB/EDPS and AI Office material; and (e) a Regulatory Maturity assessment based on transparent, evidence-based criteria. Never rank, score or characterise a jurisdiction from model memory. Where official evidence is absent, use [OFFICIAL SOURCE VERIFICATION REQUIRED]. Do not hard-code example countries or case-specific facts.
@@ -50590,6 +50644,84 @@ async function buildDocx(system,items,title){
   nodes.push(para([new D.PageBreak()]));
   return nodes;
  }
+ // ── Classification Decision Record — the complete, granular authoritative
+ // record (distinct from the one-page Dashboard above): the citable reference
+ // an auditor or notified body would actually consult.
+ function classificationDecisionRecordDocx(){
+  const rec=buildClassificationDecisionRecordData(system);
+  const nodes=[];
+  const h2=text=>para(inlineRuns(D,text,{font:'Georgia',size:23,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_2,alignment:D.AlignmentType.LEFT,spacing:{before:180,after:80},keepNext:true});
+  const card=(label,value)=>[table([[label,String(value==null?'':value)]]),para('',{spacing:{after:100}})];
+  const bullet=text=>para(inlineRuns(D,text),{bullet:{level:0}});
+  nodes.push(para(inlineRuns(D,'Classification Decision Record',{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));
+  nodes.push(para(inlineRuns(D,'The complete, citable regulatory decision record for this AI system. This is the single authoritative source for downstream modules, auditors and notified bodies — not a summary.'),{}));
+  if(!rec.available){
+   nodes.push(table([['STATUS','P1 classification not yet completed for this system — this record becomes available once P1 finishes with a validated result.']]));
+   nodes.push(para([new D.PageBreak()]));
+   return nodes;
+  }
+  nodes.push(...card('AI System',rec.aiSystem));
+  nodes.push(...card('Legal Route',rec.legalRoute));
+  nodes.push(...card('Article',rec.article));
+  nodes.push(...card('Annex',rec.annex));
+  nodes.push(h2('Reasoning'));
+  nodes.push(para(inlineRuns(D,rec.reasoning),{}));
+  nodes.push(h2('Evidence'));
+  nodes.push(para(inlineRuns(D,rec.evidence),{}));
+  nodes.push(h2('Remaining Uncertainties'));
+  rec.remainingUncertainties.forEach(u=>nodes.push(bullet(u)));
+  nodes.push(para('',{spacing:{after:80}}));
+  nodes.push(h2('Official Verification Required'));
+  rec.officialVerificationRequired.forEach(v=>nodes.push(bullet(v)));
+  nodes.push(para('',{spacing:{after:80}}));
+  nodes.push(...card('Confidence',rec.confidence.legalConfidenceBand));
+  nodes.push(...card('Responsible actor',rec.responsibleActor));
+  nodes.push(...card('Date',rec.date));
+  nodes.push(para([new D.PageBreak()]));
+  return nodes;
+ }
+ // ── Facts / Legal Test / Analysis / Conclusion / Evidence visual separation ──
+ // For P1 output content only: detects the machine-readable labels mandated by
+ // the governance layer and renders each as a distinct, colour-coded card
+ // instead of an undifferentiated paragraph, so a reader can see at a glance
+ // which sentence is a fact, which is legal analysis, and which is the final
+ // regulatory conclusion. Falls back to plain paragraph rendering (identical
+ // to blockNodes) for any content that doesn't use the labels.
+ function structuralCardDocx(kind,label,text){
+  const PALETTE={
+   facts:       {fill:'F7F4EB', side:gold,      labelColor:'8A6A1E', dark:false},
+   legaltest:   {fill:'EAF1F7', side:'4A7A9E',   labelColor:'2E5C78', dark:false},
+   conclusion:  {fill:teal,     side:teal,       labelColor:gold,     dark:true},
+   evidence:    {fill:white,    side:gold,       labelColor:'8A6A1E', dark:false},
+   legalroute:  {fill:teal,     side:teal,       labelColor:gold,     dark:true},
+   residuallegaluncertainty:{fill:'FBF2E4', side:'C6862E', labelColor:'8A5A1E', dark:false},
+  };
+  const c=PALETTE[kind]||PALETTE.facts;
+  return new D.Table({width:{size:100,type:D.WidthType.PERCENTAGE},borders:{top:border,bottom:border,left:{style:D.BorderStyle.SINGLE,size:16,color:c.side},right:border,insideHorizontal:border,insideVertical:border},rows:[new D.TableRow({cantSplit:true,children:[new D.TableCell({shading:{type:D.ShadingType.CLEAR,fill:c.fill},margins:{top:110,bottom:110,left:160,right:140},children:[
+   para(inlineRuns(D,label,{size:14,bold:true,color:c.labelColor}),{spacing:{after:40}}),
+   para(inlineRuns(D,text,{color:c.dark?white:ink}),{spacing:{after:0}}),
+  ]})]})]});
+ }
+ function blockNodesP1Styled(blocks){
+  const n=[];
+  for(const b of blocks){
+   if(b.type==='p'){
+    const s=classifyP1StructuralLine(b.text);
+    if(s){
+     if(s.kind==='analysis'){ n.push(para([...inlineRuns(D,'Analysis: ',{bold:true,color:teal}),...inlineRuns(D,s.text)])); continue; }
+     n.push(structuralCardDocx(s.kind,s.label,s.text),para('',{spacing:{after:100}})); continue;
+    }
+    n.push(para(inlineRuns(D,b.text))); continue;
+   }
+   if(b.type==='table'){n.push(table(b.rows),para('',{spacing:{after:140}}));continue}
+   if(b.type==='heading'){n.push(para(inlineRuns(D,b.text,{font:'Georgia',size:b.level===1?28:b.level===2?25:22,color:teal,bold:true}),{heading:b.level===1?D.HeadingLevel.HEADING_2:b.level===2?D.HeadingLevel.HEADING_3:D.HeadingLevel.HEADING_4,alignment:D.AlignmentType.LEFT,spacing:{before:200,after:90},keepNext:true}));continue}
+   if(b.type==='quote'){n.push(new D.Table({width:{size:100,type:D.WidthType.PERCENTAGE},borders:{top:border,bottom:border,left:{style:D.BorderStyle.SINGLE,size:12,color:gold},right:border,insideHorizontal:border,insideVertical:border},rows:[new D.TableRow({cantSplit:true,children:[new D.TableCell({shading:{type:D.ShadingType.CLEAR,fill:'F7F4EB'},margins:{top:120,bottom:120,left:160,right:140},children:[para(inlineRuns(D,b.text),{spacing:{after:0}})]})]})]}));continue}
+   if(b.type==='bullet'){n.push(para(inlineRuns(D,b.text),{bullet:{level:0}}));continue}
+   if(b.type==='number'){n.push(para(inlineRuns(D,b.num+'. '+b.text)));continue}
+   n.push(para(inlineRuns(D,b.text)));
+  }
+  return n;
+ }
  const prompts=PROMPTS.filter(p=>items.some(o=>promptOf(o)===p)),tag=prompts.join('-')||'Complete',children=[];
  children.push(new D.Table({width:{size:100,type:D.WidthType.PERCENTAGE},borders:{top:{style:D.BorderStyle.NONE},bottom:{style:D.BorderStyle.NONE},left:{style:D.BorderStyle.NONE},right:{style:D.BorderStyle.NONE},insideHorizontal:{style:D.BorderStyle.NONE},insideVertical:{style:D.BorderStyle.NONE}},rows:[new D.TableRow({children:[new D.TableCell({shading:{type:D.ShadingType.CLEAR,fill:teal},margins:{top:900,bottom:900,left:420,right:420},children:[para(inlineRuns(D,'EACE.ai',{font:'Georgia',size:52,color:gold,bold:true}),{alignment:D.AlignmentType.CENTER,spacing:{after:240}}),para(inlineRuns(D,title||'Complete Regulatory Documentation',{font:'Georgia',size:34,color:white,bold:true}),{alignment:D.AlignmentType.CENTER,spacing:{after:200}}),para(inlineRuns(D,system.name||'AI System',{font:'Georgia',size:25,color:white}),{alignment:D.AlignmentType.CENTER,spacing:{after:260}}),para(inlineRuns(D,'PROMPTS '+tag+' | '+items.length+' REGULATORY ARTEFACTS',{size:17,color:gold,bold:true}),{alignment:D.AlignmentType.CENTER,spacing:{after:360}}),para(inlineRuns(D,'CONFIDENTIAL - Human review required before regulatory use',{size:15,color:white}),{alignment:D.AlignmentType.CENTER,spacing:{after:0}}),(()=>{const cst=placeholderStatsDocx(null),ctot=cst.A+cst.B+cst.C;return ctot?para(inlineRuns(D,cst.A+' of '+ctot+' outstanding fields require direct user input before submission',{size:13,color:white}),{alignment:D.AlignmentType.CENTER,spacing:{before:160,after:0}}):para('',{spacing:{after:0}})})()]})]})]}),para([new D.PageBreak()]));
  children.push(para(inlineRuns(D,'Document Overview',{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));children.push(table([['Document','System','Included prompts','Artefacts'],[title||'Complete Regulatory Documentation',system.name||'AI System',tag,String(items.length)]]),para([new D.PageBreak()]));
@@ -50606,10 +50738,10 @@ async function buildDocx(system,items,title){
   }
   children.push(para([new D.PageBreak()]));
  }
- if(prompts.includes('P1')) children.push(...executiveDashboardDocx());
+ if(prompts.includes('P1')){ children.push(...executiveDashboardDocx()); children.push(...classificationDecisionRecordDocx()); }
  children.push(para(inlineRuns(D,'Contents',{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));for(const p of prompts)children.push(para(inlineRuns(D,p+' - '+LABEL[p],{bold:true,color:'1A5A73'}),{alignment:D.AlignmentType.LEFT}));children.push(para([new D.PageBreak()]));
  let cur='';for(const o of items){const p=promptOf(o);if(p!==cur){if(cur)children.push(para([new D.PageBreak()]));cur=p;children.push(para(inlineRuns(D,p+' - '+LABEL[p],{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));}
-  children.push(para(inlineRuns(D,String(o.code||o.outputId||o.outputNumber||'Document')+' - '+String(o.title||'Untitled artefact'),{font:'Georgia',size:27,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_2,alignment:D.AlignmentType.LEFT,spacing:{before:220,after:80},keepNext:true}));if(o.article)children.push(table([['LEGAL BASIS',o.article]]));if(p&&SUMMARY_CODES_DOCX[p]===o.code)children.push(...summaryDashboard(p));children.push(...blockNodes(parseMd(o.content||'')))}
+  children.push(para(inlineRuns(D,String(o.code||o.outputId||o.outputNumber||'Document')+' - '+String(o.title||'Untitled artefact'),{font:'Georgia',size:27,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_2,alignment:D.AlignmentType.LEFT,spacing:{before:220,after:80},keepNext:true}));if(o.article)children.push(table([['LEGAL BASIS',o.article]]));if(p&&SUMMARY_CODES_DOCX[p]===o.code)children.push(...summaryDashboard(p));children.push(...(p==='P1'?blockNodesP1Styled(parseMd(o.content||'')):blockNodes(parseMd(o.content||''))))}
  const doc=new D.Document({creator:'EACE.ai',title:title||'Complete Regulatory Documentation',description:'EACE.ai regulatory documentation',styles:{default:{document:{run:{font:'Arial',size:20,color:ink},paragraph:{spacing:{line:240,after:90}}}}},sections:[{properties:{page:{margin:{top:850,right:850,bottom:850,left:850}}},children}]});return await D.Packer.toBlob(doc);
 }
 async function buildPdf(system,items,title){
@@ -51986,6 +52118,56 @@ async function buildPdf(system,items,title){
   table([['Date',dash.date]]);
   page();
  }
+ // ── Classification Decision Record — the complete, granular authoritative
+ // record (distinct from the one-page Dashboard above): the citable reference
+ // an auditor or notified body would actually consult.
+ function drawClassificationDecisionRecord(){
+  const rec=buildClassificationDecisionRecordData(system);
+  heading('Classification Decision Record',1);
+  para('The complete, citable regulatory decision record for this AI system. This is the single authoritative source for downstream modules, auditors and notified bodies — not a summary.');
+  if(!rec.available){
+   table([['STATUS','P1 classification not yet completed for this system — this record becomes available once P1 finishes with a validated result.']]);
+   page();
+   return;
+  }
+  table([['AI System',rec.aiSystem]]);
+  table([['Legal Route',rec.legalRoute]]);
+  table([['Article',rec.article]]);
+  table([['Annex',rec.annex]]);
+  heading('Reasoning',2); para(rec.reasoning);
+  heading('Evidence',2); para(rec.evidence);
+  heading('Remaining Uncertainties',2); rec.remainingUncertainties.forEach(u=>list(u));
+  heading('Official Verification Required',2); rec.officialVerificationRequired.forEach(v=>list(v));
+  table([['Confidence',rec.confidence.legalConfidenceBand]]);
+  table([['Responsible actor',rec.responsibleActor]]);
+  table([['Date',rec.date]]);
+  page();
+ }
+ // ── Facts / Legal Test / Analysis / Conclusion / Evidence visual separation ──
+ // For P1 output content only: mirrors the DOCX renderer's structuralCardDocx/
+ // blockNodesP1Styled — a colour-coded call-out box per labelled element
+ // instead of an undifferentiated paragraph.
+ function structuralCallPdf(text,label,accentRGB,badgeFillRGB,badgeTextRGB){
+  const fs=8.6,lh=12.3,pad=10;
+  font('bold',7,badgeTextRGB);const bw=Math.max(48,d.getTextWidth(clean(label))+14);
+  const textX=L+pad*2+bw,textW=W-R-pad-textX;
+  const ls=wrap(text,fs,textW),h=Math.max(36,ls.length*lh+pad*2);need(h+8);
+  d.setFillColor(...C.pale);d.setDrawColor(...accentRGB);d.setLineWidth(.6);d.roundedRect(L,y,CW,h,3,3,'FD');
+  d.setFillColor(...badgeFillRGB);d.roundedRect(L+pad,y+pad,bw,16,2,2,'F');font('bold',7,badgeTextRGB);d.text(clean(label),L+pad+bw/2,y+pad+10.5,{align:'center',maxWidth:bw-4});
+  let yy=y+pad+9;for(const line of ls){textLine(line,textX,yy,fs,'normal',C.ink);yy+=lh}y+=h+8;
+ }
+ function drawP1StructuralBlock(kind,label,text){
+  const PALETTE={
+   facts:       {accent:C.gold,          badgeFill:C.gold,          badgeText:C.white},
+   legaltest:   {accent:[74,122,158],    badgeFill:[74,122,158],    badgeText:C.white},
+   conclusion:  {accent:C.teal,          badgeFill:C.teal,          badgeText:C.gold},
+   evidence:    {accent:C.gold,          badgeFill:C.white,         badgeText:C.teal},
+   legalroute:  {accent:C.teal,          badgeFill:C.teal,          badgeText:C.gold},
+   residuallegaluncertainty:{accent:[198,134,46], badgeFill:[198,134,46], badgeText:C.white},
+  };
+  const c=PALETTE[kind]||PALETTE.facts;
+  structuralCallPdf(text,label,c.accent,c.badgeFill,c.badgeText);
+ }
  // Cover
  d.setFillColor(...C.teal);d.rect(0,0,W,H,'F');d.setDrawColor(...C.gold);d.setLineWidth(.8);d.line(52,92,W-52,92);d.line(52,H-96,W-52,H-96);font('bold',13,C.gold);d.text('EACE.ai · EU AI Compliance Engine',W/2,70,{align:'center'});font('bold',25,C.white);let yy=205;for(const line of d.splitTextToSize(clean(title||'Complete Regulatory Documentation'),W-120)){d.text(line,W/2,yy,{align:'center'});yy+=31}font('normal',15,C.white);yy+=24;for(const line of d.splitTextToSize(clean(system&&system.name||'AI System'),W-135)){d.text(line,W/2,yy,{align:'center'});yy+=21}font('bold',8.5,C.gold);d.text('FROM CRISIS TO AUTHORITY™',W/2,H-116,{align:'center'});font('normal',7.5,[225,226,223]);d.text('CONFIDENTIAL · Human review required before regulatory use',W/2,H-68,{align:'center'});
  const coverPh=placeholderStats(null),coverPhTotal=coverPh.A+coverPh.B+coverPh.C;
@@ -52003,10 +52185,10 @@ async function buildPdf(system,items,title){
   need(16);legend(L,y,[{color:CAT_COLOR.A,label:'User input required'},{color:CAT_COLOR.B,label:'Internal system reference'},{color:CAT_COLOR.C,label:'Source verification required'}]);y+=18;
   overviewPillars.forEach(pp=>{ heading(pp+' — '+(LABEL[pp]||''),2); drawSummaryDashboard(pp); });
   page();
-  if(overviewPillars.includes('P1')) drawExecutiveDashboard();
+  if(overviewPillars.includes('P1')){ drawExecutiveDashboard(); drawClassificationDecisionRecord(); }
  }
  let outIndex=0;
- for(const o of items){const p=promptOf(o);if(p&&p!==cur){cur=p;heading(p+' - '+LABEL[p],1,'prompt:'+p)}const outLabel=clean(o.code||o.outputId||'Document')+(o.title?' - '+clean(o.title):'');heading(outLabel,2,'output:'+outIndex);if(o.article||o.legalBasis)call('Legal basis: '+clean(o.article||o.legalBasis),'LEGAL');if(p&&SUMMARY_CODES[p]===o.code)drawSummaryDashboard(p);for(const b of parse(o.content||o.text||o.body||'')){if(b.t==='h')heading(b.v,Math.min(4,b.l));else if(b.t==='table')table(b.rows);else if(b.t==='li')list(b.v,b.n);else if(b.t==='call')call(b.v);else if(b.t==='rule')rule();else para(b.v)}y+=9;outIndex++}
+ for(const o of items){const p=promptOf(o);if(p&&p!==cur){cur=p;heading(p+' - '+LABEL[p],1,'prompt:'+p)}const outLabel=clean(o.code||o.outputId||'Document')+(o.title?' - '+clean(o.title):'');heading(outLabel,2,'output:'+outIndex);if(o.article||o.legalBasis)call('Legal basis: '+clean(o.article||o.legalBasis),'LEGAL');if(p&&SUMMARY_CODES[p]===o.code)drawSummaryDashboard(p);for(const b of parse(o.content||o.text||o.body||'')){if(b.t==='h')heading(b.v,Math.min(4,b.l));else if(b.t==='table')table(b.rows);else if(b.t==='li')list(b.v,b.n);else if(b.t==='call')call(b.v);else if(b.t==='rule')rule();else if(b.t==='p'&&p==='P1'){const s=classifyP1StructuralLine(b.v);if(s){if(s.kind==='analysis')para('Analysis: '+s.text);else drawP1StructuralBlock(s.kind,s.label,s.text);}else para(b.v);}else para(b.v)}y+=9;outIndex++}
  footer();
  // Draw clickable TOC on reserved pages after page numbers are known.
  let tocPage=2,ty=74;const targetMap=new Map(tocEntries.map(e=>[e.anchor,e]));
