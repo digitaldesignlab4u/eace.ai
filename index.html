@@ -6330,6 +6330,26 @@ document.addEventListener('visibilitychange',()=>{
 });
 window.addEventListener('pagehide',()=>{flushAutosave('pagehide');checkpointExecution('pagehide');});
 window.addEventListener('beforeunload',()=>{flushAutosave('beforeunload');checkpointExecution('beforeunload');});
+// The handler above already tries to save silently, but it never actually
+// warns the user — closing the tab mid-generation (or with an unsaved edit
+// that hasn't hit the 350ms autosave debounce yet) previously happened with
+// zero feedback. This is the single most common real-world way "generated
+// but not exported" content is perceived as lost: the content is in fact
+// still safely persisted (see persistCompletedExecOutput, called after every
+// single output, and the IndexedDB overflow store for large workspaces), but
+// the user had no signal that leaving right now was ever risky. Surface the
+// browser's native confirmation dialog in the two states where it matters.
+window.addEventListener('beforeunload',(e)=>{
+  const generating = !!(typeof exec!=='undefined' && exec && exec.running);
+  const unsaved = typeof EACE_AUTOSAVE!=='undefined' && EACE_AUTOSAVE && EACE_AUTOSAVE.dirty;
+  if(!generating && !unsaved) return;
+  const msg = generating
+    ? 'A regulatory document is still being generated. The output in progress has not finished — completed outputs are already saved, but leaving now will interrupt this one.'
+    : 'You have unsaved changes that have not finished autosaving yet.';
+  e.preventDefault();
+  e.returnValue = msg;
+  return msg;
+});
 window.addEventListener('pageshow',()=>{
   if(exec && Array.isArray(exec.outputs)){ normalizeInterruptedExecution(); checkpointExecution('pageshow'); }
 });
