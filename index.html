@@ -14939,14 +14939,20 @@ function updateProfileRing(sysId){
   };
   window.renderWorkflowNavigator = function(sys){
     var stt=state(sys), prof=readiness(sys);
+    // Every tab is always reachable — none of these represent a genuinely
+    // blocked step, only varying amounts of content. Each tab's own render
+    // function (renderSWAssessment/Evidence/Documents/Audit/Export) is
+    // responsible for showing an empty state with a clear next action
+    // (Run Prompt / Generate Export Package / etc.) when it has nothing to
+    // show yet, instead of the tab itself being locked out.
     var flows=[
       {id:'overview',n:'Overview',ready:true},
       {id:'profile',n:'Master Profile',ready:true},
-      {id:'assessment',n:'Assessment',ready:prof.pct>=70},
-      {id:'evidence',n:'Evidence',ready:Object.keys(sys.ran||{}).length>0},
+      {id:'assessment',n:'Assessment',ready:true},
+      {id:'evidence',n:'Evidence',ready:true},
       {id:'documents',n:'Documents',ready:true},
       {id:'audit-sys',n:'Audit Trail',ready:true},
-      {id:'export-sys',n:'Exports',ready:Object.keys(sys.ran||{}).length>0}
+      {id:'export-sys',n:'Exports',ready:true}
     ];
     return '<nav class="sw-tab-row">'+flows.map(function(f){
       var active=sw.tab===f.id;
