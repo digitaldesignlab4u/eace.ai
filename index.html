@@ -4340,7 +4340,20 @@ function buildExecutiveClassificationDashboardData(sys){
   const name = (sys && (sys.name || (sys.data&&sys.data.sysName))) || 'Untitled AI System';
   const auth = getAuthoritativeP1Result(sys);
   const d = (sys && sys.data) || {};
-  if(!auth) return {available:false, aiSystem:name};
+  if(!auth){
+    // "Not available" has two very different causes that read identically to
+    // a user unless distinguished: P1 simply hasn't been run yet, or P1's 37
+    // narrative outputs are all complete but the separate, stricter
+    // deterministic classifier (which only reads structured intake facts,
+    // never the AI narrative) couldn't reach a result from the facts on
+    // record. Conflating them as one generic "not yet completed" message is
+    // actively misleading in the second case — the run did finish.
+    const p1OutputsGenerated = (Array.isArray(sys&&sys.generatedOutputs)?sys.generatedOutputs:[]).filter(o=>o.pillar==='P1').length;
+    const assessment = sys && sys.p1ClassificationAssessment;
+    const blocked = !!(assessment && assessment.needsReview);
+    const missingFacts = blocked ? (assessment.reviewErrors||[]) : [];
+    return {available:false, aiSystem:name, p1OutputsGenerated, blocked, missingFacts};
+  }
 
   const ROUTE_LABEL = {
     'article-6-1-annex-i':            {status:'HIGH-RISK (Annex I — Art. 6(1))',            route:'Article 6(1) + Annex I — '+((auth.annexIProductLegislation||[]).join('; ')||'[NOT PROVIDED]')},
@@ -4389,8 +4402,15 @@ function buildExecutiveClassificationDashboardData(sys){
   if(sourceVerificationRequired) residualRisks.push(sourceVerificationRequired+' item(s) in the generated P1 documentation are marked [OFFICIAL SOURCE VERIFICATION REQUIRED].');
   if(!residualRisks.length) residualRisks.push('No outstanding legally material issues identified in the generated P1 documentation.');
 
+  const STATUS_COLOR = {
+    'article-6-1-annex-i':'B43A3A', 'article-6-2-annex-iii':'B43A3A',
+    'article-6-3-annex-iii-exception':'2FA7A3', 'article-5-prohibited':'B43A3A',
+    'article-2-exemption':'7A7A75', 'article-50-transparency':'2FA7A3',
+    'gpai-route':'2FA7A3', 'outside-high-and-limited-risk':'2FA7A3',
+  };
   return {
     available:true, aiSystem:name, aiActScope,
+    statusColor: STATUS_COLOR[auth.legalRoute] || 'D3A84A',
     highRiskStatus:routeInfo.status, legalRoute:routeInfo.route, modules,
     confidence:{
       factsUsed:suppliedFacts.length, factsTotal:P1_FACT_KEYS.length,
@@ -4404,6 +4424,22 @@ function buildExecutiveClassificationDashboardData(sys){
   };
 }
 
+// Shared by the Dashboard and Decision Record renderers (DOCX + PDF) for the
+// "not available" STATUS row — distinguishes "P1 hasn't run yet" from "P1's
+// narrative outputs are complete but the deterministic classifier is blocked
+// on missing structured facts", since the generic message read as wrong when
+// the run had, in fact, finished.
+function dashboardUnavailableMessage(dash){
+  if(dash && dash.blocked){
+    return 'P1 narrative outputs are complete, but the deterministic classification could not be confirmed — missing: '
+      +(dash.missingFacts&&dash.missingFacts.length?dash.missingFacts.join('; '):'required facts not on record')
+      +'. Add these facts to the Master Profile and re-run P1 to populate this section.';
+  }
+  if(dash && dash.p1OutputsGenerated){
+    return 'P1 outputs are complete, but the classification result has not yet been confirmed for this system.';
+  }
+  return 'P1 has not been run for this system yet — this section becomes available once P1 completes with a validated result.';
+}
 // ── STRUCTURAL LINE CLASSIFIER — Facts / Legal Test / Analysis / Conclusion /
 // Evidence separation ──
 // Detects the mandatory machine-readable labels required by the P1 governance
@@ -4469,6 +4505,17 @@ function buildClassificationDecisionRecordData(sys){
 // mechanical count of [INPUT REQUIRED]/[OFFICIAL SOURCE VERIFICATION
 // REQUIRED] markers in that pillar's own generated content — nothing is
 // invented for a pillar this function doesn't have real data for.
+// Compact one-line variant of dashboardUnavailableMessage(), for the
+// per-pillar "Engine trigger" indicators (P2A/P2B/P4) rather than a full
+// STATUS row — same underlying distinction: P1 not run vs. P1 complete but
+// blocked on missing structured facts.
+function p1GateLabel(sys){
+  const p1OutputsGenerated = (Array.isArray(sys&&sys.generatedOutputs)?sys.generatedOutputs:[]).filter(o=>o.pillar==='P1').length;
+  const assessment = sys && sys.p1ClassificationAssessment;
+  if(assessment && assessment.needsReview) return 'P1 complete — classification pending additional facts (see P1 Executive Classification Dashboard)';
+  if(p1OutputsGenerated) return 'P1 complete — classification not yet confirmed';
+  return 'P1 has not been run yet';
+}
 function buildPillarStatusIndicators(sys, pillar){
   const auth = getAuthoritativeP1Result(sys);
   const d = (sys && sys.data) || {};
@@ -4481,7 +4528,12 @@ function buildPillarStatusIndicators(sys, pillar){
 
   if(pillar==='P1'){
     const dash = buildExecutiveClassificationDashboardData(sys);
-    if(!dash.available) return [{label:'AI Act Scope', value:'Not yet determined — P1 classification in progress'}];
+    if(!dash.available){
+      const value = dash.blocked
+        ? 'P1 outputs generated — deterministic classification pending additional facts: '+(dash.missingFacts.join('; ')||'see Master Profile')
+        : (dash.p1OutputsGenerated ? 'P1 outputs generated — classification not yet confirmed' : 'Not yet determined — P1 has not been run for this system');
+      return [{label:'AI Act Scope', value}];
+    }
     return [
       {label:'AI Act Scope', value:dash.aiActScope},
       {label:'Classification', value:dash.highRiskStatus},
@@ -4490,7 +4542,7 @@ function buildPillarStatusIndicators(sys, pillar){
     ];
   }
   if(pillar==='P2A'){
-    const trigger = !auth ? 'P1 classification not yet completed'
+    const trigger = !auth ? p1GateLabel(sys)
       : auth.legalRoute==='article-6-1-annex-i' ? 'HIGH-RISK (Annex I — Art. 6(1))'
       : auth.legalRoute==='article-6-2-annex-iii' ? 'HIGH-RISK (Annex III — Art. 6(2))'
       : 'Not a high-risk route — provider engine run outside its default trigger, verify basis';
@@ -4500,7 +4552,7 @@ function buildPillarStatusIndicators(sys, pillar){
     return [{label:'Engine trigger', value:trigger}, {label:'Provider establishment', value:establishment}, docCompleteness, verificationIndicator];
   }
   if(pillar==='P2B'){
-    const trigger = !auth ? 'P1 classification not yet completed'
+    const trigger = !auth ? p1GateLabel(sys)
       : auth.classification!=='high-risk' ? 'Not a high-risk route — deployer engine run outside its default trigger, verify basis'
       : auth.legalRoute==='article-6-1-annex-i' ? 'HIGH-RISK (Annex I — Art. 6(1))'
       : 'HIGH-RISK (Annex III — Art. 6(2))';
@@ -4519,7 +4571,7 @@ function buildPillarStatusIndicators(sys, pillar){
     return [{label:'Applicable Art. 50 triggers', value: triggers.length?triggers.join('; '):'None confirmed on the current facts — verify inputs'}, docCompleteness, verificationIndicator];
   }
   if(pillar==='P4'){
-    const status = !auth ? 'P1 classification not yet completed'
+    const status = !auth ? p1GateLabel(sys)
       : auth.legalRoute==='outside-high-and-limited-risk' ? 'Minimal risk confirmed (Art. 95)'
       : 'Engine run outside its default minimal-risk trigger — verify basis';
     return [{label:'Minimal-risk status', value:status}, docCompleteness, verificationIndicator];
@@ -7553,13 +7605,27 @@ function buildClassificationControlRecord(pillar){
 
 function buildGlobalRegulatoryGovernance(pillar){
   const cutOff=new Date().toISOString().slice(0,10);
+  const _govInputData = (function(){
+    try{ return (typeof getExecutionInputData==='function') ? getExecutionInputData() : (typeof st!=='undefined'?st.data:null); }
+    catch(e){ return null; }
+  })();
   // The Settings "Default document language" control (st.defaultLang) was
   // previously stored and persisted but never actually reached the model —
   // nothing in the prompt referenced it, so every output was written in
   // English regardless of what the user selected. Wire it in here, in the
   // shared, cached governance layer, so it applies uniformly to every
   // output in the run rather than needing to be repeated per output.
-  const outputLanguage = (typeof st!=='undefined' && st && st.defaultLang) ? st.defaultLang : 'English';
+  // A system's own "Authoritative language (primary)" field (data.authLang,
+  // set per-system in the Master Profile intake) is a more specific, more
+  // deliberately-made choice than the global Settings dropdown -- a real
+  // run confirmed this: a system had authLang='Croatian' but the global
+  // Settings dropdown was untouched (defaulted to English), and every
+  // output was generated in English while faithfully echoing back
+  // "Authoritative Language: Croatian" as a fact it had been told, never
+  // told to actually write in. Prefer the per-system field; fall back to
+  // the global Settings dropdown only when the system has none set.
+  const outputLanguage = (_govInputData && _govInputData.authLang) ? _govInputData.authLang
+    : (typeof st!=='undefined' && st && st.defaultLang) ? st.defaultLang : 'English';
   const languageDirective = outputLanguage==='English' ? '' : `\n\nLANGUAGE — MANDATORY: write the ENTIRE output — every heading, table, list, note and paragraph — in ${outputLanguage}. This is a firm user instruction, not a stylistic preference; the default for a new system or an unmodified setting is English, but this run has explicitly selected ${outputLanguage}, so do not default back to English and do not mix languages within a section. Meet the highest professional standard of ${outputLanguage} legal drafting: correct spelling, grammar, punctuation and register throughout, equivalent to a document produced by a qualified ${outputLanguage}-speaking EU regulatory lawyer, not a literal or mechanical translation. Use the exact terminology and phrasing of the official ${outputLanguage}-language text of every EU legislative instrument cited in this output — the AI Act (Regulation (EU) 2024/1689, as amended by Regulation (EU) 2026/1744), and, wherever cited, the GDPR, the ePrivacy Directive, NIS2, the MDR, the IVDR, the DSA, the Data Act, the Cyber Resilience Act, DORA, the European Accessibility Act or any other EU regulation or directive referenced — as published in the Official Journal of the European Union, where ${outputLanguage} is an official EU language with an authoritative OJ translation. Do not invent your own translation of a defined legal term where the official one is knowable, and do not silently fall back to the English term because it is more familiar. Article, paragraph, Annex and Recital NUMBERS are language-invariant and must stay in their standard numeric form (e.g. "Article 6(2)", "Annex III", "Recital 42") even while the surrounding prose is in ${outputLanguage}; do not translate or renumber them. Field names, output codes (e.g. O01, P2A) and legal-citation short-forms may remain in their standard form for cross-referencing. If a required legal or technical term genuinely has no settled ${outputLanguage} equivalent, state the term in ${outputLanguage} followed by the English term in parentheses once, then continue in ${outputLanguage}.`;
   // Separate from the single document language above: Art. 50 requires the
   // notices actually shown to affected end users (not the internal
@@ -7568,11 +7634,8 @@ function buildGlobalRegulatoryGovernance(pillar){
   // team reads the documentation in. Only fires when the user has populated
   // this fact; it is additive to, not a replacement for, languageDirective.
   const noticeLangs = (function(){
-    try{
-      const d = (typeof getExecutionInputData==='function') ? getExecutionInputData() : (typeof st!=='undefined'?st.data:null);
-      const v = d && (d.noticeLanguages || d.outputLang);
-      return Array.isArray(v) ? v.filter(Boolean) : (v ? [v] : []);
-    }catch(e){ return []; }
+    const v = _govInputData && (_govInputData.noticeLanguages || _govInputData.outputLang);
+    return Array.isArray(v) ? v.filter(Boolean) : (v ? [v] : []);
   })();
   const noticeLanguageDirective = noticeLangs.length ? `\n\nUSER-FACING NOTICE LANGUAGES — MANDATORY WHERE THIS OUTPUT CONTAINS END-USER-FACING NOTICE TEXT (e.g. Art. 50 transparency notices, consent or information notices, any text a natural person actually sees): produce that specific notice text in EACH of the following languages of use, clearly labelled per language and each meeting the same spelling/grammar/official-terminology standard set out above for its own language: ${noticeLangs.join(', ')}. This applies only to the actual notice text shown to end users — the surrounding regulatory analysis, headings and internal documentation stay in the single document language above. If this output contains no end-user-facing notice text, this instruction does not apply.` : '';
   const classificationMode = pillar==='P1'
@@ -50952,14 +51015,18 @@ async function buildDocx(system,items,title){
   nodes.push(para(inlineRuns(D,'Executive Classification Dashboard',{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));
   nodes.push(para(inlineRuns(D,'Authoritative, one-page visual summary of the completed P1 classification. All detailed legal reasoning remains in the individual P1 outputs that follow.'),{}));
   if(!dash.available){
-   nodes.push(table([['STATUS','P1 classification not yet completed for this system — this dashboard becomes available once P1 finishes with a validated result.']]));
+   nodes.push(table([['STATUS', dashboardUnavailableMessage(dash)]]));
    nodes.push(para([new D.PageBreak()]));
    return nodes;
   }
   nodes.push(h2('Regulatory Status'));
   nodes.push(...card('AI System',dash.aiSystem));
   nodes.push(...card('AI Act Scope',dash.aiActScope));
-  nodes.push(...card('High-Risk Status',dash.highRiskStatus));
+  nodes.push(para(inlineRuns(D,'HIGH-RISK STATUS',{size:15,color:'6B6B63',bold:true}),{spacing:{after:20}}));
+  nodes.push(para([
+   new D.TextRun({text:'● ',color:dash.statusColor,bold:true,font:'Arial',size:22}),
+   ...inlineRuns(D,dash.highRiskStatus,{bold:true}),
+  ],{spacing:{after:100}}));
   nodes.push(...card('Legal Route',dash.legalRoute));
   nodes.push(h2('Regulatory Modules Activated'));
   dash.modules.forEach(m=>nodes.push(bullet(m)));
@@ -50989,11 +51056,16 @@ async function buildDocx(system,items,title){
   nodes.push(para(inlineRuns(D,'Classification Decision Record',{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));
   nodes.push(para(inlineRuns(D,'The complete, citable regulatory decision record for this AI system. This is the single authoritative source for downstream modules, auditors and notified bodies — not a summary.'),{}));
   if(!rec.available){
-   nodes.push(table([['STATUS','P1 classification not yet completed for this system — this record becomes available once P1 finishes with a validated result.']]));
+   nodes.push(table([['STATUS', dashboardUnavailableMessage(rec)]]));
    nodes.push(para([new D.PageBreak()]));
    return nodes;
   }
   nodes.push(...card('AI System',rec.aiSystem));
+  nodes.push(para(inlineRuns(D,'HIGH-RISK STATUS',{size:15,color:'6B6B63',bold:true}),{spacing:{after:20}}));
+  nodes.push(para([
+   new D.TextRun({text:'● ',color:rec.statusColor,bold:true,font:'Arial',size:22}),
+   ...inlineRuns(D,rec.highRiskStatus,{bold:true}),
+  ],{spacing:{after:100}}));
   nodes.push(...card('Legal Route',rec.legalRoute));
   nodes.push(...card('Article',rec.article));
   nodes.push(...card('Annex',rec.annex));
@@ -51641,7 +51713,12 @@ async function exportZip(s,scope,items){
  }
  z.file('EACE-'+slug(s.name)+'-complete-case.json',JSON.stringify(fullJson(s,items),null,2));
  z.file('manifest.json',JSON.stringify({schema:'EACE_REGULATORY_PACKAGE_V42',systemId:s.id,systemName:s.name,prompts:ps,outputCount:items.length,generatedAt:new Date().toISOString(),contents:['complete DOCX','one DOCX per prompt','complete JSON','attachments metadata','audit/evidence in JSON']},null,2));
- const at=s.promptAttachments||{};for(const p of Object.keys(at)){for(const a of at[p]||[]){const name=String(a.name||a.filename||'attachment').replace(/[\\/:*?"<>|]/g,'_');const data=a.data||a.base64;if(typeof data==='string'&&data.startsWith('data:')){const comma=data.indexOf(',');try{z.folder('08_Attachments/'+p).file(name,data.slice(comma+1),{base64:true,compression:'STORE'})}catch(e){}}else if(a.text)z.folder('08_Attachments/'+p).file(name.replace(/\.[^.]+$/,'')+'.txt',String(a.text));}}
+ // Attachments live under Documents/{pillar}/Attachments -- alongside that
+ // pillar's own DOCX and outputs folder, in the same tree a reader is
+ // already browsing, rather than in a separately-numbered top-level folder
+ // (the leftover "08_" prefix belonged to an older, differently-organised
+ // export scheme with no matching 00-07 folders left in this one).
+ const at=s.promptAttachments||{};for(const p of Object.keys(at)){for(const a of at[p]||[]){const name=String(a.name||a.filename||'attachment').replace(/[\\/:*?"<>|]/g,'_');const data=a.data||a.base64;if(typeof data==='string'&&data.startsWith('data:')){const comma=data.indexOf(',');try{z.folder('Documents/'+p+'/Attachments').file(name,data.slice(comma+1),{base64:true,compression:'STORE'})}catch(e){}}else if(a.text)z.folder('Documents/'+p+'/Attachments').file(name.replace(/\.[^.]+$/,'')+'.txt',String(a.text));}}
  const blob=await z.generateAsync({type:'blob',compression:'STORE',streamFiles:true},meta=>{if(meta.percent>0&&meta.percent<100&&Math.round(meta.percent)%25===0)console.info('[EACE ZIP]',Math.round(meta.percent)+'%')});
  const r=trigger(blob,base+'-regulatory-package.zip');toast('Regulatory ZIP downloaded.','var(--green)');return r;
 }
@@ -52446,19 +52523,34 @@ async function buildPdf(system,items,title){
  // ── Executive Classification Dashboard (data-only, no AI call) — the
  // authoritative one-page visual representation of the completed P1
  // classification. Drawn immediately after Pillar Completion Overview.
+ // A coloured, filled circle drawn directly with the PDF's own vector API --
+ // not a Unicode glyph (font/renderer support for "●" is inconsistent) and
+ // not plain grey text -- next to the status label, in the classification's
+ // actual colour (red/green/amber/grey per STATUS_COLOR in
+ // buildExecutiveClassificationDashboardData).
+ function statusDot(hex,label){
+  const rgb=hexToRgb(hex).split(',').map(Number);
+  const fs=10.5,lh=fs*1.28,ls=wrap(label,fs,CW-18,true);
+  need(Math.max(lh,ls.length*lh)+8);
+  const cy=y-fs*0.32,cx=L+5;
+  d.setFillColor(...rgb);d.circle(cx,cy,4.4,'F');
+  font('bold',fs,C.ink);
+  for(let i=0;i<ls.length;i++){d.text(ls[i],L+16,y+i*lh)}
+  y+=ls.length*lh+8;
+ }
  function drawExecutiveDashboard(){
   const dash=buildExecutiveClassificationDashboardData(system);
   heading('Executive Classification Dashboard',1);
   para('Authoritative, one-page visual summary of the completed P1 classification. All detailed legal reasoning remains in the individual P1 outputs that follow.');
   if(!dash.available){
-   table([['STATUS','P1 classification not yet completed for this system — this dashboard becomes available once P1 finishes with a validated result.']]);
+   table([['STATUS', dashboardUnavailableMessage(dash)]]);
    page();
    return;
   }
   heading('Regulatory Status',2);
   table([['AI System',dash.aiSystem]]);
   table([['AI Act Scope',dash.aiActScope]]);
-  table([['High-Risk Status',dash.highRiskStatus]]);
+  statusDot(dash.statusColor,dash.highRiskStatus);
   table([['Legal Route',dash.legalRoute]]);
   heading('Regulatory Modules Activated',2);
   dash.modules.forEach(m=>list(m));
@@ -52481,11 +52573,12 @@ async function buildPdf(system,items,title){
   heading('Classification Decision Record',1);
   para('The complete, citable regulatory decision record for this AI system. This is the single authoritative source for downstream modules, auditors and notified bodies — not a summary.');
   if(!rec.available){
-   table([['STATUS','P1 classification not yet completed for this system — this record becomes available once P1 finishes with a validated result.']]);
+   table([['STATUS', dashboardUnavailableMessage(rec)]]);
    page();
    return;
   }
   table([['AI System',rec.aiSystem]]);
+  statusDot(rec.statusColor,rec.highRiskStatus);
   table([['Legal Route',rec.legalRoute]]);
   table([['Article',rec.article]]);
   table([['Annex',rec.annex]]);
