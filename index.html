@@ -3789,7 +3789,7 @@ function buildSchema() {
         fields:[
           {id:'providerRegion',type:'dd',label:'Provider establishment — region',options:C,required:true,legal:'AI Act Art. 2(1)(a)',note:true},
           {id:'sysName',type:'text',label:'System name',required:true,placeholder:'e.g. HealthNet Predictive Care',legal:'AI Act Annex IV(1)',shared:true},
-          {id:'outputLang',type:'dd',label:'Preferred output language',options:['Bulgarian','Croatian','Czech','Danish','Dutch','English','Estonian','Finnish','French','German','Greek','Hungarian','Irish','Italian','Latvian','Lithuanian','Maltese','Polish','Portuguese','Romanian','Slovak','Slovenian','Spanish','Swedish','Other'],legal:'AI Act Art. 13',shared:true},
+          {id:'authLang',type:'dd',label:'Authoritative language (primary)',options:['Bulgarian','Croatian','Czech','Danish','Dutch','English','Estonian','Finnish','French','German','Greek','Hungarian','Irish','Italian','Latvian','Lithuanian','Maltese','Polish','Portuguese','Romanian','Slovak','Slovenian','Spanish','Swedish','Other'],legal:'AI Act Art. 13',shared:true},
           {id:'sysDesc',type:'textarea',label:'System description',required:true,placeholder:'2–4 sentence functional description.',legal:'AI Act Art. 11 & Annex IV',shared:true},
           {id:'intendedPurpose',type:'textarea',label:'Intended purpose',required:true,placeholder:'The declared purpose — fixes the legal boundary of liability.',legal:'AI Act Art. 3(12) & Annex IV',shared:true},
           {id:'criticality',type:'seg',label:'System criticality / impact level',legal:'AI Act Art. 9',shared:true},
@@ -3987,7 +3987,7 @@ function buildSchema() {
       ]},
       {code:'IG5',title:'Jurisdiction & Geography',short:'Jurisdiction',subtitle:'Where the system is deployed and notices are required.',fields:[
         {id:'countryDeploy',type:'ms',label:'Deployment countries',options:C,shared:true,legal:'AI Act Art. 70'},
-        {id:'outputLang',type:'ms',label:'Languages for notices',options:['Bulgarian','Croatian','Czech','Danish','Dutch','English','Estonian','Finnish','French','German','Greek','Hungarian','Irish','Italian','Latvian','Lithuanian','Maltese','Polish','Portuguese','Romanian','Slovak','Slovenian','Spanish','Swedish','Other'],shared:true,legal:'AI Act Art. 13'},
+        {id:'noticeLanguages',type:'ms',label:'Languages for notices',options:['Bulgarian','Croatian','Czech','Danish','Dutch','English','Estonian','Finnish','French','German','Greek','Hungarian','Irish','Italian','Latvian','Lithuanian','Maltese','Polish','Portuguese','Romanian','Slovak','Slovenian','Spanish','Swedish','Other'],shared:true,legal:'AI Act Art. 50'},
       ]},
     ],
     P4:[
@@ -7758,8 +7758,13 @@ function buildGlobalRegulatoryGovernance(pillar){
   // can be a different, broader set than the one language the compliance
   // team reads the documentation in. Only fires when the user has populated
   // this fact; it is additive to, not a replacement for, languageDirective.
+  // Reads noticeLanguages ONLY — outputLang is a distinct field ("additional
+  // output languages" for the documentation itself) and was previously used
+  // as a fallback here, which silently fed a document-language selection
+  // into the end-user notice-language mechanism whenever the dedicated
+  // noticeLanguages field was empty. Keep the two concepts strictly separate.
   const noticeLangs = (function(){
-    const v = _govInputData && (_govInputData.noticeLanguages || _govInputData.outputLang);
+    const v = _govInputData && _govInputData.noticeLanguages;
     return Array.isArray(v) ? v.filter(Boolean) : (v ? [v] : []);
   })();
   const noticeLanguageDirective = noticeLangs.length ? `\n\nUSER-FACING NOTICE LANGUAGES — MANDATORY WHERE THIS OUTPUT CONTAINS END-USER-FACING NOTICE TEXT (e.g. Art. 50 transparency notices, consent or information notices, any text a natural person actually sees): produce that specific notice text in EACH of the following languages of use, clearly labelled per language and each meeting the same spelling/grammar/official-terminology standard set out above for its own language: ${noticeLangs.join(', ')}. This applies only to the actual notice text shown to end users — the surrounding regulatory analysis, headings and internal documentation stay in the single document language above. If this output contains no end-user-facing notice text, this instruction does not apply.` : '';
@@ -10623,6 +10628,10 @@ const MASTER_GROUPS = [
       {id:'outputLang',    type:'ms',     label:'Output language(s) — additional',
        options:['Bulgarian','Croatian','Czech','Danish','Dutch','English','Estonian','Finnish','French','German','Greek','Hungarian','Irish','Italian','Latvian','Lithuanian','Maltese','Polish','Portuguese','Romanian','Slovak','Slovenian','Spanish','Swedish','Other','French','Italian','Spanish','Polish','Dutch','Swedish','Danish','Finnish','Portuguese','Romanian','Czech','Slovak','Hungarian','Bulgarian','Greek'],
        legal:'AI Act Art. 13'},
+      {id:'noticeLanguages',type:'ms',   label:'Transparency notice languages (Art. 50)',
+       sub:'Languages the actual end-user-facing Art. 50 notices must be produced in — separate from the authoritative document language above; only applies to notice text, not the surrounding regulatory documentation.',
+       options:['Bulgarian','Croatian','Czech','Danish','Dutch','English','Estonian','Finnish','French','German','Greek','Hungarian','Irish','Italian','Latvian','Lithuanian','Maltese','Polish','Portuguese','Romanian','Slovak','Slovenian','Spanish','Swedish','Other'],
+       cond:d=>d.r50Interacts, legal:'AI Act Art. 50(1)'},
       {id:'ifuLanguages',  type:'textarea',label:'IFU and contractual instrument languages',
        placeholder:'e.g. English (authoritative) + Croatian (HR) + German (DE) + Slovenian (SL)',
        rows:2, legal:'AI Act Art. 13 & Art. 25'},
