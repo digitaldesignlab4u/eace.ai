@@ -3314,6 +3314,21 @@ const FIELD_SCHEMA = {
     opts:EU24_LANGS,
     help:'Languages in which the system generates outputs shown to end users.',
     example:'English',                   source:'sys'},
+  // authLang is the actual authoritative-document-language driver read by
+  // buildGlobalRegulatoryGovernance() — the id must match exactly, with no
+  // rename layer, since the pre-existing outputLanguages field above is a
+  // multiselect and never migrates into authLang (migrateSysData only
+  // converts a string-typed legacy outputLang, never an array).
+  authLang:        {id:'authLang',        label:'Authoritative language (primary)', type:'select',
+    opts:EU24_LANGS,
+    help:'The single language every generated document is written in. This is the field that actually controls output language — Output languages above only records which languages end users see, it does not change what EACE writes in.',
+    example:'Croatian',                  source:'sys'},
+  ifuLanguages:    {id:'ifuLanguages',    label:'IFU and contractual instrument languages', type:'textarea',
+    help:'Languages the Instructions for Use and contractual instruments are provided in.',
+    example:'English (authoritative) + Croatian (HR) + German (DE)', source:'sys'},
+  linguisticPolicy:{id:'linguisticPolicy',label:'Linguistic fidelity and translation policy', type:'textarea',
+    help:'How translations are reviewed and approved for legal accuracy.',
+    example:'Internal regulatory desk signs off all non-English texts', source:'sys'},
 
 };
 
@@ -14039,7 +14054,7 @@ function renderSWProfile(sys){
     + section('Supply Chain & Roles',['hasSupplyChain','vendorName','vendorRole','euImporter','euDistributor','systemIntegrator','apiDependencies'])
     + section('Security & NIS2',['nisEntityProvider','nisEntityDeployer','criticalInfra','cybersecFramework','incidentResponse','vulnDisclosure'])
     + section('Sectors & Exemptions',['sector','interactionType','exemResearch','exemMilitary','exemPersonal','exemOpenSource','exemNone'])
-    + section('Languages',['outputLanguages','ifuLanguages','noticeLanguages'])
+    + section('Languages',['authLang','outputLanguages','noticeLanguages','ifuLanguages','linguisticPolicy'])
     + section('Regulatory History',['deploymentStatus','incidents','nearMisses','regulatoryContact','priorAudit'])
     + renderProfileAttachments(sys, sys.attachments||[], (sys.attachments||[]).reduce(function(a,at){return a+(at.charCount||0);},0), 120000)
     +'<div class="msp-save-bar">'
