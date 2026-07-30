@@ -12476,6 +12476,7 @@ function buildIntakeContext(d, pillar){
   if(d.authLang)                  lines.push(`Authoritative language: ${d.authLang}`);
   if(d.outputLang?.length)        lines.push(`Output language(s): ${Array.isArray(d.outputLang)?d.outputLang.join(', '):d.outputLang}`);
   if(d.ifuLanguages)              lines.push(`IFU languages: ${d.ifuLanguages}`);
+  if(d.linguisticPolicy)          lines.push(`Linguistic fidelity / translation review policy: ${d.linguisticPolicy}`);
   // NIS2
   if(d.nis2Provider && d.nis2Provider!=='Not classified') lines.push(`NIS2 — Provider: ${d.nis2Provider}`);
   if(d.nis2Deployer && d.nis2Deployer!=='Not classified') lines.push(`NIS2 — Deployer: ${d.nis2Deployer}`);
@@ -13553,45 +13554,6 @@ function renderSystemNextSteps(sys){
 //   Assessment Version, Engine Version, Methodology Version, System Version
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ── MASTER SYSTEM PROFILE SCHEMA ──
-// Every field entered here is available to all assessments automatically.
-// Assessment modules NEVER re-ask for fields available in the profile.
-// If a field must differ in a specific assessment: Override (logged in audit).
-const MASTER_PROFILE_SCHEMA = {
-  // Identity
-  identity: [
-    'sysName','sysVersion','sysDescription','intendedPurpose','deploymentContext',
-    'modelType','gpaiDependency','gpaiModel','gpaiProvider',
-  ],
-  // Organisation
-  organisation: [
-    'providerOrg','providerCountry','providerRegion','providerLegal','providerContact',
-    'deployerOrg','deployerCountry','deployerRegion','deployerLegal','deployerContact',
-    'dpoName','dpoEmail',
-  ],
-  // Deployment
-  deployment: [
-    'deploymentCountries','memberStates','hostingCountry','deploymentScale',
-    'deploymentModel','sector','criticality','affectedPersons','userType',
-  ],
-  // Technical
-  technical: [
-    'interactionType','outputTypes','dataTypes','personalData','specialCategories',
-    'metadataCommunications','trackingTech','zdr','downstreamMod',
-    'cybersecFramework','cloudProvider','subProcessors','nisEntity',
-  ],
-  // Language & output
-  language: [
-    'outputLanguages','ifuLanguages','linguisticFidelity',
-  ],
-  // Legal
-  legal: [
-    'legalBasis','contractType','contractParties','legalFramework',
-  ],
-  // Attachments (stored separately, referenced here)
-  attachments: [], // [{id, name, category, mimeType, text, uploadedAt, sysId}]
-};
-
 // ── SYSTEM OBJECT FACTORY ──
 // Creates a new AI system with empty Master Profile + empty lifecycle arrays
 function createSystemObject(overrides){
@@ -13611,7 +13573,7 @@ function createSystemObject(overrides){
     pillar:    'P1',             // Current/last engine used
 
     // Master System Profile data (SSoT)
-    profile: {},                 // All fields from MASTER_PROFILE_SCHEMA
+    profile: {},                 // Populated from the live MASTER_GROUPS form fields
     data:    {},                 // Legacy — synced from profile for backwards compat
 
     // Lifecycle arrays
