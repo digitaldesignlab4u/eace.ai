@@ -6606,6 +6606,16 @@ function runEngine(){
     exec.inputSnapshot = (saved.inputSnapshot&&typeof saved.inputSnapshot==='object')
       ? JSON.parse(JSON.stringify(saved.inputSnapshot))
       : runInputSnapshot;
+    // Language fields are a live user decision, not a frozen run parameter:
+    // if the user changed authLang/outputLanguages/noticeLanguages while a
+    // run sat paused, every output still pending at resume must honour the
+    // CURRENT choice, not whatever was true when the run was first started.
+    // Only these three fields are refreshed — every other field stays frozen
+    // at the original snapshot so already-completed outputs remain
+    // consistent with what generated them.
+    ['authLang','outputLanguages','noticeLanguages'].forEach(f=>{
+      if(runInputSnapshot && runInputSnapshot[f]!==undefined) exec.inputSnapshot[f]=runInputSnapshot[f];
+    });
     exec.inputSnapshotSavedAt = saved.inputSnapshotSavedAt||saved.savedAt||Date.now();
     exec.attachments = Array.isArray(saved.attachments) ? saved.attachments : (exec.attachments||[]);
     restoreExecutionInputSnapshot(exec.inputSnapshot);
@@ -7764,9 +7774,29 @@ function buildGlobalRegulatoryGovernance(pillar){
   // "Authoritative Language: Croatian" as a fact it had been told, never
   // told to actually write in. Prefer the per-system field; fall back to
   // the global Settings dropdown only when the system has none set.
-  const outputLanguage = (_govInputData && _govInputData.authLang) ? _govInputData.authLang
-    : (typeof st!=='undefined' && st && st.defaultLang) ? st.defaultLang : 'English';
-  const languageDirective = outputLanguage==='English' ? '' : `\n\nLANGUAGE — MANDATORY: write the ENTIRE output — every heading, table, list, note and paragraph — in ${outputLanguage}. This is a firm user instruction, not a stylistic preference; the default for a new system or an unmodified setting is English, but this run has explicitly selected ${outputLanguage}, so do not default back to English and do not mix languages within a section. Meet the highest professional standard of ${outputLanguage} legal drafting: correct spelling, grammar, punctuation and register throughout, equivalent to a document produced by a qualified ${outputLanguage}-speaking EU regulatory lawyer, not a literal or mechanical translation. Use the exact terminology and phrasing of the official ${outputLanguage}-language text of every EU legislative instrument cited in this output — the AI Act (Regulation (EU) 2024/1689, as amended by Regulation (EU) 2026/1744), and, wherever cited, the GDPR, the ePrivacy Directive, NIS2, the MDR, the IVDR, the DSA, the Data Act, the Cyber Resilience Act, DORA, the European Accessibility Act or any other EU regulation or directive referenced — as published in the Official Journal of the European Union, where ${outputLanguage} is an official EU language with an authoritative OJ translation. Do not invent your own translation of a defined legal term where the official one is knowable, and do not silently fall back to the English term because it is more familiar. Article, paragraph, Annex and Recital NUMBERS are language-invariant and must stay in their standard numeric form (e.g. "Article 6(2)", "Annex III", "Recital 42") even while the surrounding prose is in ${outputLanguage}; do not translate or renumber them. Field names, output codes (e.g. O01, P2A) and legal-citation short-forms may remain in their standard form for cross-referencing. If a required legal or technical term genuinely has no settled ${outputLanguage} equivalent, state the term in ${outputLanguage} followed by the English term in parentheses once, then continue in ${outputLanguage}.`;
+  // Resolution order: the live run's captured intake (_govInputData, which
+  // is exec.inputSnapshot once a run has started) is the primary source: it
+  // is what the current output is actually being generated from. Beneath
+  // that, fall back to the active system's own stored fields directly —
+  // sys.data first, then the older sys.profile bucket that data is synced
+  // from — in case a run is being prompted for before a snapshot exists
+  // (e.g. cost-estimate preview calls). Only the global Settings dropdown,
+  // then a hard 'English' default, sit beneath the system's own choice.
+  const _activeSysForLang = (typeof st!=='undefined' && st && Array.isArray(st.systems)) ? st.systems.find(s=>s.id===st.activeId) : null;
+  const _firstLang = v => Array.isArray(v) ? (v.find(Boolean)||null) : (v ? String(v).trim()||null : null);
+  const outputLanguage = _firstLang(_govInputData && _govInputData.authLang)
+    || _firstLang(_activeSysForLang && _activeSysForLang.data && _activeSysForLang.data.authLang)
+    || _firstLang(_activeSysForLang && _activeSysForLang.profile && _activeSysForLang.profile.authLang)
+    || _firstLang(typeof st!=='undefined' && st && st.defaultLang)
+    || 'English';
+  // Always send an explicit instruction, including for English: relying on
+  // the model's implicit default (the previous behaviour here) means the
+  // moment any other part of the prompt introduces language cues, there is
+  // no firm anchor pulling generation back to English. An explicit
+  // instruction costs nothing and removes that ambiguity entirely.
+  const languageDirective = outputLanguage==='English'
+    ? `\n\nLANGUAGE — MANDATORY: write the ENTIRE output — every heading, table, list, note and paragraph — in English. This is the explicitly resolved document language for this run (no other language was selected), not an assumption; do not switch languages within a section.`
+    : `\n\nLANGUAGE — MANDATORY: write the ENTIRE output — every heading, table, list, note and paragraph — in ${outputLanguage}. This is a firm user instruction, not a stylistic preference; the default for a new system or an unmodified setting is English, but this run has explicitly selected ${outputLanguage}, so do not default back to English and do not mix languages within a section. Meet the highest professional standard of ${outputLanguage} legal drafting: correct spelling, grammar, punctuation and register throughout, equivalent to a document produced by a qualified ${outputLanguage}-speaking EU regulatory lawyer, not a literal or mechanical translation. Use the exact terminology and phrasing of the official ${outputLanguage}-language text of every EU legislative instrument cited in this output — the AI Act (Regulation (EU) 2024/1689, as amended by Regulation (EU) 2026/1744), and, wherever cited, the GDPR, the ePrivacy Directive, NIS2, the MDR, the IVDR, the DSA, the Data Act, the Cyber Resilience Act, DORA, the European Accessibility Act or any other EU regulation or directive referenced — as published in the Official Journal of the European Union, where ${outputLanguage} is an official EU language with an authoritative OJ translation. Do not invent your own translation of a defined legal term where the official one is knowable, and do not silently fall back to the English term because it is more familiar. Article, paragraph, Annex and Recital NUMBERS are language-invariant and must stay in their standard numeric form (e.g. "Article 6(2)", "Annex III", "Recital 42") even while the surrounding prose is in ${outputLanguage}; do not translate or renumber them. Field names, output codes (e.g. O01, P2A) and legal-citation short-forms may remain in their standard form for cross-referencing. If a required legal or technical term genuinely has no settled ${outputLanguage} equivalent, state the term in ${outputLanguage} followed by the English term in parentheses once, then continue in ${outputLanguage}. The Mandatory Status Vocabulary anchor terms and P1 visual classification badges keep their fixed English form per the rules below — that is a deliberate, narrow exception to this instruction, not licence to leave anything else in English.`;
   // Separate from the single document language above: Art. 50 requires the
   // notices actually shown to affected end users (not the internal
   // regulatory documentation) to be provided in the language(s) of use, which
