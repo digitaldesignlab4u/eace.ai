@@ -50155,6 +50155,18 @@ function eacePackageOutputs(sys,type){
   if(type==='vendor') return all.filter(o=>/TECHNICAL DOCUMENTATION|ARCHITECTURE|SUPPLY|VENDOR|CONTRACT|CYBER|NIS2|GDPR|DATA SOVEREIGN|QMS|QUALITY|HANDOVER|SUBPROCESSOR|CONFORMITY|AUDIT/i.test((o.title||'')+' '+(o.content||'').slice(0,500))).slice(0,28);
   return all;
 }
+// Chrome text (headings, table labels) the DOCX builder itself writes around
+// the LLM-generated content. This is separate code from the prompt-side
+// LANGUAGE — MANDATORY directive: the model only controls the body content it
+// generates, never the static wrapper this function assembles, so authLang
+// must be applied here independently or the exported document stays English
+// around correctly-translated content. Extend DOCX_CHROME_I18N with further
+// languages the same way; any language without an entry here falls back to
+// the English key unchanged, so this is additive and never breaks a run.
+const DOCX_CHROME_I18N={
+  Croatian:{'Document Control':'Kontrola dokumenta','System':'Sustav','System version':'Verzija sustava','Risk classification':'Klasifikacija rizika','Included prompts':'Uključeni moduli','Included outputs':'Uključeni outputi','Organisation':'Organizacija','Generated':'Generirano','Table of Contents':'Sadržaj','Contents':'Sadržaj','Evidence Register':'Registar dokaza','ID':'ID','Prompt':'Modul','Output':'Output','Title':'Naslov','Hash':'Hash','Legal basis: ':'Pravna osnova: ','Unknown':'Nepoznato'},
+};
+function docxChromeTr(key,lang){return (DOCX_CHROME_I18N[lang]&&DOCX_CHROME_I18N[lang][key])||key;}
 async function buildUnifiedDocxBlob(sys,opts){
   opts=opts||{};
   if(typeof docx==='undefined') throw new Error('DOCX library not available');
@@ -50164,16 +50176,18 @@ async function buildUnifiedDocxBlob(sys,opts){
   const C=window.EACE_DOC_COLORS||{teal:'003238',gold:'B8962E',white:'FFFFFF',grayLight:'F4F4F2'};
   const bodyFont='Cambria', titleFont='Georgia', sysName=sys.name||sys.data?.sysName||'Untitled AI System';
   const label=opts.label||'Complete Regulatory Documentation';
+  const docLang=(sys.data&&sys.data.authLang)||(sys.profile&&sys.profile.authLang)||'English';
+  const t=k=>docxChromeTr(k,docLang);
   const children=[];
-  children.push(new Table({width:{size:100,type:WidthType.PERCENTAGE},borders:{top:{style:BorderStyle.NONE},bottom:{style:BorderStyle.NONE},left:{style:BorderStyle.NONE},right:{style:BorderStyle.NONE},insideHorizontal:{style:BorderStyle.NONE},insideVertical:{style:BorderStyle.NONE}},rows:[new TableRow({children:[new TableCell({shading:{type:ShadingType.CLEAR,fill:C.teal},margins:{top:500,bottom:500,left:300,right:300},children:[new Paragraph({alignment:AlignmentType.CENTER,children:[new TextRun({text:'E A C E',bold:true,size:42,color:C.gold,font:titleFont})]}),new Paragraph({alignment:AlignmentType.CENTER,spacing:{before:260,after:120},children:[new TextRun({text:label,bold:true,size:34,color:C.white,font:titleFont})]}),new Paragraph({alignment:AlignmentType.CENTER,children:[new TextRun({text:sysName,size:24,color:C.white,font:bodyFont})]}),new Paragraph({alignment:AlignmentType.CENTER,spacing:{before:160},children:[new TextRun({text:'Generated '+new Date().toLocaleDateString('en-GB'),size:18,color:'CCCCCC',font:'Calibri'})]})]})]})]}));
+  children.push(new Table({width:{size:100,type:WidthType.PERCENTAGE},borders:{top:{style:BorderStyle.NONE},bottom:{style:BorderStyle.NONE},left:{style:BorderStyle.NONE},right:{style:BorderStyle.NONE},insideHorizontal:{style:BorderStyle.NONE},insideVertical:{style:BorderStyle.NONE}},rows:[new TableRow({children:[new TableCell({shading:{type:ShadingType.CLEAR,fill:C.teal},margins:{top:500,bottom:500,left:300,right:300},children:[new Paragraph({alignment:AlignmentType.CENTER,children:[new TextRun({text:'E A C E',bold:true,size:42,color:C.gold,font:titleFont})]}),new Paragraph({alignment:AlignmentType.CENTER,spacing:{before:260,after:120},children:[new TextRun({text:label,bold:true,size:34,color:C.white,font:titleFont})]}),new Paragraph({alignment:AlignmentType.CENTER,children:[new TextRun({text:sysName,size:24,color:C.white,font:bodyFont})]}),new Paragraph({alignment:AlignmentType.CENTER,spacing:{before:160},children:[new TextRun({text:t('Generated')+' '+new Date().toLocaleDateString('en-GB'),size:18,color:'CCCCCC',font:'Calibri'})]})]})]})]}));
   children.push(new Paragraph({children:[new PageBreak()]}));
-  children.push(new Paragraph({text:'Document Control',heading:HeadingLevel.HEADING_1}));
+  children.push(new Paragraph({text:t('Document Control'),heading:HeadingLevel.HEADING_1}));
   const engines=[...new Set(outputs.map(eaceInferPillar))].filter(p=>p!=='OTHER');
-  const meta=[['System',sysName],['System version',sys.data?.sysVersion||'v1.0'],['Risk classification',sys.risk||'Unknown'],['Included prompts',engines.join(', ')||'—'],['Included outputs',String(outputs.length)],['Organisation',sys.data?.orgName||'—'],['Generated',new Date().toISOString()]];
+  const meta=[[t('System'),sysName],[t('System version'),sys.data?.sysVersion||'v1.0'],[t('Risk classification'),sys.risk||t('Unknown')],[t('Included prompts'),engines.join(', ')||'—'],[t('Included outputs'),String(outputs.length)],[t('Organisation'),sys.data?.orgName||'—'],[t('Generated'),new Date().toISOString()]];
   children.push(new Table({width:{size:100,type:WidthType.PERCENTAGE},rows:meta.map(([k,v])=>new TableRow({children:[new TableCell({width:{size:30,type:WidthType.PERCENTAGE},shading:{type:ShadingType.CLEAR,fill:C.grayLight},children:[new Paragraph({children:[new TextRun({text:k,bold:true,size:18,color:C.teal})]})]}),new TableCell({width:{size:70,type:WidthType.PERCENTAGE},children:[new Paragraph({children:[new TextRun({text:String(v),size:18,font:bodyFont})]})]})]}))}));
   children.push(new Paragraph({children:[new PageBreak()]}));
-  children.push(new Paragraph({text:'Table of Contents',heading:HeadingLevel.HEADING_1}));
-  if(TableOfContents) children.push(new TableOfContents('Contents',{hyperlink:true,headingStyleRange:'1-3'}));
+  children.push(new Paragraph({text:t('Table of Contents'),heading:HeadingLevel.HEADING_1}));
+  if(TableOfContents) children.push(new TableOfContents(t('Contents'),{hyperlink:true,headingStyleRange:'1-3'}));
   else engines.forEach(p=>children.push(new Paragraph({children:[new TextRun({text:p+' — '+((window.ENGINE_LABELS||{})[p]||p),bold:true})]})));
   children.push(new Paragraph({children:[new PageBreak()]}));
   let current='';
@@ -50181,13 +50195,13 @@ async function buildUnifiedDocxBlob(sys,opts){
     const p=eaceInferPillar(o);
     if(p!==current){current=p;children.push(new Paragraph({text:p+' — '+((window.ENGINE_LABELS||{})[p]||p),heading:HeadingLevel.HEADING_1,spacing:{before:200,after:180}}));}
     children.push(new Paragraph({text:(o.code||'')+' — '+(o.title||'Untitled artefact'),heading:HeadingLevel.HEADING_2,spacing:{before:260,after:100}}));
-    if(o.article) children.push(window.buildDocxPanel?buildDocxPanel('LEGAL BASIS',[o.article],{bodyFont}):new Paragraph({children:[new TextRun({text:'Legal basis: '+o.article,bold:true})]}));
+    if(o.article) children.push(window.buildDocxPanel?buildDocxPanel('LEGAL BASIS',[o.article],{bodyFont}):new Paragraph({children:[new TextRun({text:t('Legal basis: ')+o.article,bold:true})]}));
     const els=window.parseContentToDocxElements?parseContentToDocxElements(o.content||'',bodyFont):[new Paragraph({text:o.content||''})];els.forEach(x=>children.push(x));
   });
   children.push(new Paragraph({children:[new PageBreak()]}));
-  children.push(new Paragraph({text:'Evidence Register',heading:HeadingLevel.HEADING_1}));
+  children.push(new Paragraph({text:t('Evidence Register'),heading:HeadingLevel.HEADING_1}));
   const ev=sys.evidence||[];
-  if(ev.length) children.push(new Table({width:{size:100,type:WidthType.PERCENTAGE},rows:[new TableRow({children:['ID','Prompt','Output','Title','Hash'].map(h=>new TableCell({shading:{type:ShadingType.CLEAR,fill:C.teal},children:[new Paragraph({children:[new TextRun({text:h,bold:true,color:C.white,size:16})]})]}))}),...ev.map(e=>new TableRow({children:[e.id||'',e.pillar||'',e.outputCode||'',e.title||e.type||'',String(e.hash||'').slice(0,18)].map(v=>new TableCell({children:[new Paragraph({children:[new TextRun({text:String(v),size:15})]})]}))}))]}));
+  if(ev.length) children.push(new Table({width:{size:100,type:WidthType.PERCENTAGE},rows:[new TableRow({children:[t('ID'),t('Prompt'),t('Output'),t('Title'),t('Hash')].map(h=>new TableCell({shading:{type:ShadingType.CLEAR,fill:C.teal},children:[new Paragraph({children:[new TextRun({text:h,bold:true,color:C.white,size:16})]})]}))}),...ev.map(e=>new TableRow({children:[e.id||'',e.pillar||'',e.outputCode||'',e.title||e.type||'',String(e.hash||'').slice(0,18)].map(v=>new TableCell({children:[new Paragraph({children:[new TextRun({text:String(v),size:15})]})]}))}))]}));
   const doc=new Document({features:{updateFields:true},sections:[{headers:{default:new Header({children:[new Paragraph({alignment:AlignmentType.RIGHT,children:[new TextRun({text:'EACE · '+label,size:14,color:'777777'})]})]})},footers:{default:new Footer({children:[new Paragraph({alignment:AlignmentType.CENTER,children:[new TextRun({text:'EACE.ai · '+sysName+' · ',size:13,color:'777777'}),new TextRun({children:[PageNumber.CURRENT],size:13,color:'777777'})]})]})},children}]});
   return Packer.toBlob(doc);
 }
@@ -51089,8 +51103,48 @@ function inlineRuns(D,text,base){
  };
  while((m=re.exec(String(text||'')))){addPlain(text.slice(p,m.index));const z=m[0];if(z.startsWith('**'))addPlain(z.slice(2,-2),{bold:true});else if(z.startsWith('`'))addPlain(z.slice(1,-1),{font:'Consolas',size:18});else addPlain(z.slice(1,-1),{italics:true});p=m.index+z.length}addPlain(String(text||'').slice(p));return out;
 }
+// Chrome text (headings, table labels, dashboard captions) that buildDocx and
+// buildPdf write around the LLM-generated content. This is entirely separate
+// from the prompt-side LANGUAGE — MANDATORY directive: the model only
+// controls the substantive text it generates, never this static wrapper, so
+// a system's authLang must be applied here independently or the exported
+// document stays English around correctly-translated content — this is what
+// was actually happening even after the prompt-side fix, because buildDocx
+// (not the earlier-patched buildUnifiedDocxBlob, which this file's layered
+// history left unreachable from the real export buttons) is the function
+// genuinely wired to "One complete DOCX" / "Complete PDF". Add further
+// languages to EACE_DOC_I18N the same way; any language without an entry
+// falls back to the English key unchanged, so this is additive and never
+// breaks a run.
+const EACE_DOC_I18N={
+ Croatian:{
+  'User input required':'Potreban korisnički unos','Internal system reference':'Interna referenca sustava','Source verification required':'Potrebna provjera izvora',
+  'Documents':'Dokumenti','Completion':'Dovršenost','Status':'Status','Complete':'Dovršeno','In progress':'U tijeku','Not started':'Nije započeto',
+  'Key Regulatory Indicators':'Ključni regulatorni pokazatelji',
+  'Executive Classification Dashboard':'Izvršna klasifikacijska nadzorna ploča',
+  'Authoritative, one-page visual summary of the completed P1 classification. All detailed legal reasoning remains in the individual P1 outputs that follow.':'Mjerodavan, jednostranični vizualni sažetak dovršene P1 klasifikacije. Sve detaljno pravno obrazloženje ostaje u pojedinačnim P1 outputima koji slijede.',
+  'Regulatory Status':'Regulatorni status','AI System':'AI sustav','AI Act Scope':'Opseg AI Acta','HIGH-RISK STATUS':'STATUS VISOKOG RIZIKA','Legal Route':'Pravni put',
+  'Regulatory Modules Activated':'Aktivirani regulatorni moduli','Confidence':'Pouzdanost','Facts used in this classification':'Činjenice korištene u ovoj klasifikaciji',
+  'Evidence pending ([INPUT REQUIRED] / [NOT PROVIDED])':'Dokazi na čekanju ([INPUT REQUIRED] / [NOT PROVIDED])','Official source verification required':'Potrebna službena provjera izvora',
+  'Legal confidence band':'Razina pravne pouzdanosti','Residual Legal Risks':'Preostali pravni rizici','Responsible actor':'Odgovorna osoba','Date':'Datum',
+  'Classification Decision Record':'Klasifikacijski odlučni zapis',
+  'The complete, citable regulatory decision record for this AI system. This is the single authoritative source for downstream modules, auditors and notified bodies — not a summary.':'Potpuni, citirani regulatorni odlučni zapis za ovaj AI sustav. Ovo je jedini mjerodavni izvor za daljnje module, revizore i prijavljena tijela — ne sažetak.',
+  'Article':'Članak','Annex':'Prilog','Reasoning':'Obrazloženje','Evidence':'Dokazi','Remaining Uncertainties':'Preostale nesigurnosti','Official Verification Required':'Potrebna službena provjera',
+  'Human-in-the-Loop Acknowledgment':'Potvrda ljudskog nadzora (Human-in-the-Loop)','Confirmed by':'Potvrdio/la','Confirmed at':'Vrijeme potvrde','System ID / P1 version':'ID sustava / P1 verzija','Audit timestamp':'Vremenska oznaka revizije',
+  'STATUS':'STATUS','No Human-in-the-Loop acknowledgment is on record for this run — this record must be treated as unconfirmed.':'Za ovo pokretanje nije zabilježena potvrda ljudskog nadzora (Human-in-the-Loop) — ovaj zapis treba smatrati nepotvrđenim.',
+  'Analysis: ':'Analiza: ',
+  'Complete Regulatory Documentation':'Potpuna regulatorna dokumentacija','CONFIDENTIAL - Human review required before regulatory use':'POVJERLJIVO - Potreban ljudski pregled prije regulatorne uporabe',
+  'Document Overview':'Pregled dokumenta','Document':'Dokument','System':'Sustav','Included prompts':'Uključeni moduli','Artefacts':'Artefakti',
+  'Pillar Completion Overview':'Pregled dovršenosti pillar-a',
+  'At-a-glance completion status for each regulatory pillar included in this document. The detailed narrative executive summary for each pillar follows within that section.':'Status dovršenosti na prvi pogled za svaki regulatorni pillar uključen u ovaj dokument. Detaljan narativni izvršni sažetak za svaki pillar slijedi unutar tog odjeljka.',
+  'Contents':'Sadržaj','LEGAL BASIS':'PRAVNA OSNOVA','Untitled artefact':'Neimenovan artefakt',
+ },
+};
+function eaceDocT(key,lang){return (EACE_DOC_I18N[lang]&&EACE_DOC_I18N[lang][key])||key;}
 async function buildDocx(system,items,title){
  if(typeof docx==='undefined')throw new Error('DOCX library is unavailable.');const D=docx;const teal='123E3B',gold='C6A667',white='FFFFFF',ink='202020',line='D9D9D3';
+ const docLang=(system&&system.data&&system.data.authLang)||(system&&system.profile&&system.profile.authLang)||'English';
+ const t=k=>eaceDocT(k,docLang);
  const border={style:D.BorderStyle.SINGLE,size:2,color:line};
  // True single line spacing (240 = 1.0x, vs. the 276/1.15x Word default) plus a tighter
  // after-paragraph gap (90 twentieths = 4.5pt, close to the PDF renderer's ~5pt para() gap).
@@ -51115,9 +51169,9 @@ async function buildDocx(system,items,title){
  }
  function legendParaDocx(){
   return para([
-   new D.TextRun({text:'■ ',color:CAT_COLOR_DOCX.A,bold:true,font:'Arial',size:16}),new D.TextRun({text:'User input required    ',color:'6B6B63',font:'Arial',size:16}),
-   new D.TextRun({text:'■ ',color:CAT_COLOR_DOCX.B,bold:true,font:'Arial',size:16}),new D.TextRun({text:'Internal system reference    ',color:'6B6B63',font:'Arial',size:16}),
-   new D.TextRun({text:'■ ',color:CAT_COLOR_DOCX.C,bold:true,font:'Arial',size:16}),new D.TextRun({text:'Source verification required',color:'6B6B63',font:'Arial',size:16}),
+   new D.TextRun({text:'■ ',color:CAT_COLOR_DOCX.A,bold:true,font:'Arial',size:16}),new D.TextRun({text:t('User input required')+'    ',color:'6B6B63',font:'Arial',size:16}),
+   new D.TextRun({text:'■ ',color:CAT_COLOR_DOCX.B,bold:true,font:'Arial',size:16}),new D.TextRun({text:t('Internal system reference')+'    ',color:'6B6B63',font:'Arial',size:16}),
+   new D.TextRun({text:'■ ',color:CAT_COLOR_DOCX.C,bold:true,font:'Arial',size:16}),new D.TextRun({text:t('Source verification required'),color:'6B6B63',font:'Arial',size:16}),
   ],{spacing:{after:160}});
  }
  function kpiCellDocx(value,label,color){
@@ -51135,12 +51189,12 @@ async function buildDocx(system,items,title){
   // "Complete" uses the document's own brand teal, not a generic dashboard-software green,
   // so this reads as one design system with the rest of the document.
   const statusColor=pct>=100?teal:(pct>0?gold:'B03A3A');
-  const statusLabel=pct>=100?'Complete':(pct>0?'In progress':'Not started');
+  const statusLabel=pct>=100?t('Complete'):(pct>0?t('In progress'):t('Not started'));
   const noBorder={style:D.BorderStyle.NONE};
   const kpiRow=new D.Table({width:{size:100,type:D.WidthType.PERCENTAGE},borders:{top:border,bottom:border,left:border,right:border,insideHorizontal:border,insideVertical:border},rows:[new D.TableRow({cantSplit:true,children:[
-   kpiCellDocx(done+' / '+total,'Documents',teal),
-   kpiCellDocx(pct+'%','Completion',statusColor),
-   kpiCellDocx(statusLabel,'Status',statusColor),
+   kpiCellDocx(done+' / '+total,t('Documents'),teal),
+   kpiCellDocx(pct+'%',t('Completion'),statusColor),
+   kpiCellDocx(statusLabel,t('Status'),statusColor),
   ]})]});
   const barPct=Math.max(2,Math.min(100,pct));
   const barRow=new D.Table({width:{size:100,type:D.WidthType.PERCENTAGE},borders:{top:noBorder,bottom:noBorder,left:noBorder,right:noBorder,insideHorizontal:noBorder,insideVertical:noBorder},rows:[new D.TableRow({cantSplit:true,children:[
@@ -51148,17 +51202,17 @@ async function buildDocx(system,items,title){
    new D.TableCell({width:{size:100-barPct,type:D.WidthType.PERCENTAGE},shading:{type:D.ShadingType.CLEAR,fill:'E4E1D8'},margins:{top:40,bottom:40,left:0,right:0},children:[para('',{spacing:{after:0}})]}),
   ]})]});
   const pillarPh=placeholderStatsDocx(pillar),pillarPhTotal=pillarPh.A+pillarPh.B+pillarPh.C;
-  const caption=para(inlineRuns(D,done+' of '+total+' documents generated in this pillar'+(queued?' · '+queued+' queued':''),{size:16,color:'6B6B63'}),{spacing:{before:80,after:pillarPhTotal?40:200}});
+  const caption=para(inlineRuns(D,(docLang==='Croatian'?done+' od '+total+' dokumenata generirano u ovom pillar-u'+(queued?' · '+queued+' na čekanju':''):done+' of '+total+' documents generated in this pillar'+(queued?' · '+queued+' queued':'')),{size:16,color:'6B6B63'}),{spacing:{before:80,after:pillarPhTotal?40:200}});
   const phCaption=pillarPhTotal?para([
    new D.TextRun({text:String(pillarPh.A),color:CAT_COLOR_DOCX.A,bold:true,font:'Arial',size:16}),
-   new D.TextRun({text:' of '+pillarPhTotal+' outstanding fields require direct user input · '+pillarPh.B+' internal-system reference · '+pillarPh.C+' source verification',color:'6B6B63',font:'Arial',size:16}),
+   new D.TextRun({text:(docLang==='Croatian'?' od '+pillarPhTotal+' preostalih polja zahtijeva izravan korisnički unos · '+pillarPh.B+' interna referenca sustava · '+pillarPh.C+' potrebna provjera izvora':' of '+pillarPhTotal+' outstanding fields require direct user input · '+pillarPh.B+' internal-system reference · '+pillarPh.C+' source verification'),color:'6B6B63',font:'Arial',size:16}),
   ],{spacing:{after:200}}):null;
   // Key Regulatory Indicators — the substantive answer for this pillar (in
   // scope? what class? why was this engine triggered?), not just how many
   // documents are done. See buildPillarStatusIndicators for the data source.
   const indicators=buildPillarStatusIndicators(system,pillar);
   const indicatorNodes=indicators.length?[
-   para(inlineRuns(D,'Key Regulatory Indicators',{font:'Georgia',size:16,color:teal,bold:true}),{spacing:{before:60,after:60}}),
+   para(inlineRuns(D,t('Key Regulatory Indicators'),{font:'Georgia',size:16,color:teal,bold:true}),{spacing:{before:60,after:60}}),
    ...indicators.flatMap(ind=>[table([[ind.label,String(ind.value==null?'':ind.value)]]),para('',{spacing:{after:60}})]),
   ]:[];
   return [kpiRow,para('',{spacing:{after:80}}),barRow,caption].concat(phCaption?[phCaption]:[]).concat(indicatorNodes);
@@ -51172,35 +51226,35 @@ async function buildDocx(system,items,title){
   const h2=text=>para(inlineRuns(D,text,{font:'Georgia',size:23,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_2,alignment:D.AlignmentType.LEFT,spacing:{before:180,after:80},keepNext:true});
   const card=(label,value)=>[table([[label,String(value==null?'':value)]]),para('',{spacing:{after:100}})];
   const bullet=text=>para(inlineRuns(D,text),{bullet:{level:0}});
-  nodes.push(para(inlineRuns(D,'Executive Classification Dashboard',{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));
-  nodes.push(para(inlineRuns(D,'Authoritative, one-page visual summary of the completed P1 classification. All detailed legal reasoning remains in the individual P1 outputs that follow.'),{}));
+  nodes.push(para(inlineRuns(D,t('Executive Classification Dashboard'),{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));
+  nodes.push(para(inlineRuns(D,t('Authoritative, one-page visual summary of the completed P1 classification. All detailed legal reasoning remains in the individual P1 outputs that follow.')),{}));
   if(!dash.available){
-   nodes.push(table([['STATUS', dashboardUnavailableMessage(dash)]]));
+   nodes.push(table([[t('STATUS'), dashboardUnavailableMessage(dash)]]));
    nodes.push(para([new D.PageBreak()]));
    return nodes;
   }
-  nodes.push(h2('Regulatory Status'));
-  nodes.push(...card('AI System',dash.aiSystem));
-  nodes.push(...card('AI Act Scope',dash.aiActScope));
-  nodes.push(para(inlineRuns(D,'HIGH-RISK STATUS',{size:15,color:'6B6B63',bold:true}),{spacing:{after:20}}));
+  nodes.push(h2(t('Regulatory Status')));
+  nodes.push(...card(t('AI System'),dash.aiSystem));
+  nodes.push(...card(t('AI Act Scope'),dash.aiActScope));
+  nodes.push(para(inlineRuns(D,t('HIGH-RISK STATUS'),{size:15,color:'6B6B63',bold:true}),{spacing:{after:20}}));
   nodes.push(para([
    new D.TextRun({text:'● ',color:dash.statusColor,bold:true,font:'Arial',size:22}),
    ...inlineRuns(D,dash.highRiskStatus,{bold:true}),
   ],{spacing:{after:100}}));
-  nodes.push(...card('Legal Route',dash.legalRoute));
-  nodes.push(h2('Regulatory Modules Activated'));
+  nodes.push(...card(t('Legal Route'),dash.legalRoute));
+  nodes.push(h2(t('Regulatory Modules Activated')));
   dash.modules.forEach(m=>nodes.push(bullet(m)));
   nodes.push(para('',{spacing:{after:80}}));
-  nodes.push(h2('Confidence'));
-  nodes.push(...card('Facts used in this classification',dash.confidence.factsUsed+' of '+dash.confidence.factsTotal+' tracked fields'));
-  nodes.push(...card('Evidence pending ([INPUT REQUIRED] / [NOT PROVIDED])',dash.confidence.evidencePending));
-  nodes.push(...card('Official source verification required',dash.confidence.sourceVerificationRequired));
-  nodes.push(...card('Legal confidence band',dash.confidence.legalConfidenceBand));
-  nodes.push(h2('Residual Legal Risks'));
+  nodes.push(h2(t('Confidence')));
+  nodes.push(...card(t('Facts used in this classification'),dash.confidence.factsUsed+(docLang==='Croatian'?' od ':' of ')+dash.confidence.factsTotal+(docLang==='Croatian'?' praćenih polja':' tracked fields')));
+  nodes.push(...card(t('Evidence pending ([INPUT REQUIRED] / [NOT PROVIDED])'),dash.confidence.evidencePending));
+  nodes.push(...card(t('Official source verification required'),dash.confidence.sourceVerificationRequired));
+  nodes.push(...card(t('Legal confidence band'),dash.confidence.legalConfidenceBand));
+  nodes.push(h2(t('Residual Legal Risks')));
   dash.residualRisks.forEach(r=>nodes.push(bullet(r)));
   nodes.push(para('',{spacing:{after:80}}));
-  nodes.push(...card('Responsible actor',dash.responsibleActor));
-  nodes.push(...card('Date',dash.date));
+  nodes.push(...card(t('Responsible actor'),dash.responsibleActor));
+  nodes.push(...card(t('Date'),dash.date));
   nodes.push(para([new D.PageBreak()]));
   return nodes;
  }
@@ -51213,44 +51267,44 @@ async function buildDocx(system,items,title){
   const h2=text=>para(inlineRuns(D,text,{font:'Georgia',size:23,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_2,alignment:D.AlignmentType.LEFT,spacing:{before:180,after:80},keepNext:true});
   const card=(label,value)=>[table([[label,String(value==null?'':value)]]),para('',{spacing:{after:100}})];
   const bullet=text=>para(inlineRuns(D,text),{bullet:{level:0}});
-  nodes.push(para(inlineRuns(D,'Classification Decision Record',{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));
-  nodes.push(para(inlineRuns(D,'The complete, citable regulatory decision record for this AI system. This is the single authoritative source for downstream modules, auditors and notified bodies — not a summary.'),{}));
+  nodes.push(para(inlineRuns(D,t('Classification Decision Record'),{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));
+  nodes.push(para(inlineRuns(D,t('The complete, citable regulatory decision record for this AI system. This is the single authoritative source for downstream modules, auditors and notified bodies — not a summary.')),{}));
   if(!rec.available){
-   nodes.push(table([['STATUS', dashboardUnavailableMessage(rec)]]));
+   nodes.push(table([[t('STATUS'), dashboardUnavailableMessage(rec)]]));
    nodes.push(para([new D.PageBreak()]));
    return nodes;
   }
-  nodes.push(...card('AI System',rec.aiSystem));
-  nodes.push(para(inlineRuns(D,'HIGH-RISK STATUS',{size:15,color:'6B6B63',bold:true}),{spacing:{after:20}}));
+  nodes.push(...card(t('AI System'),rec.aiSystem));
+  nodes.push(para(inlineRuns(D,t('HIGH-RISK STATUS'),{size:15,color:'6B6B63',bold:true}),{spacing:{after:20}}));
   nodes.push(para([
    new D.TextRun({text:'● ',color:rec.statusColor,bold:true,font:'Arial',size:22}),
    ...inlineRuns(D,rec.highRiskStatus,{bold:true}),
   ],{spacing:{after:100}}));
-  nodes.push(...card('Legal Route',rec.legalRoute));
-  nodes.push(...card('Article',rec.article));
-  nodes.push(...card('Annex',rec.annex));
-  nodes.push(h2('Reasoning'));
+  nodes.push(...card(t('Legal Route'),rec.legalRoute));
+  nodes.push(...card(t('Article'),rec.article));
+  nodes.push(...card(t('Annex'),rec.annex));
+  nodes.push(h2(t('Reasoning')));
   nodes.push(para(inlineRuns(D,rec.reasoning),{}));
-  nodes.push(h2('Evidence'));
+  nodes.push(h2(t('Evidence')));
   nodes.push(para(inlineRuns(D,rec.evidence),{}));
-  nodes.push(h2('Remaining Uncertainties'));
+  nodes.push(h2(t('Remaining Uncertainties')));
   rec.remainingUncertainties.forEach(u=>nodes.push(bullet(u)));
   nodes.push(para('',{spacing:{after:80}}));
-  nodes.push(h2('Official Verification Required'));
+  nodes.push(h2(t('Official Verification Required')));
   rec.officialVerificationRequired.forEach(v=>nodes.push(bullet(v)));
   nodes.push(para('',{spacing:{after:80}}));
-  nodes.push(...card('Confidence',rec.confidence.legalConfidenceBand));
-  nodes.push(...card('Responsible actor',rec.responsibleActor));
-  nodes.push(...card('Date',rec.date));
-  nodes.push(h2('Human-in-the-Loop Acknowledgment'));
+  nodes.push(...card(t('Confidence'),rec.confidence.legalConfidenceBand));
+  nodes.push(...card(t('Responsible actor'),rec.responsibleActor));
+  nodes.push(...card(t('Date'),rec.date));
+  nodes.push(h2(t('Human-in-the-Loop Acknowledgment')));
   if(rec.hitlAcknowledgment){
    const h=rec.hitlAcknowledgment;
-   nodes.push(...card('Confirmed by',h.confirmerName+' — '+h.confirmerRole+(h.confirmerOrg&&h.confirmerOrg!=='[NOT PROVIDED]'?' · '+h.confirmerOrg:'')));
-   nodes.push(...card('Confirmed at',h.confirmedAt));
-   nodes.push(...card('System ID / P1 version',h.systemId+' / '+h.p1Version));
-   nodes.push(...card('Audit timestamp',h.auditTimestamp));
+   nodes.push(...card(t('Confirmed by'),h.confirmerName+' — '+h.confirmerRole+(h.confirmerOrg&&h.confirmerOrg!=='[NOT PROVIDED]'?' · '+h.confirmerOrg:'')));
+   nodes.push(...card(t('Confirmed at'),h.confirmedAt));
+   nodes.push(...card(t('System ID / P1 version'),h.systemId+' / '+h.p1Version));
+   nodes.push(...card(t('Audit timestamp'),h.auditTimestamp));
   } else {
-   nodes.push(table([['STATUS','No Human-in-the-Loop acknowledgment is on record for this run — this record must be treated as unconfirmed.']]));
+   nodes.push(table([[t('STATUS'),t('No Human-in-the-Loop acknowledgment is on record for this run — this record must be treated as unconfirmed.')]]));
   }
   nodes.push(para([new D.PageBreak()]));
   return nodes;
@@ -51284,7 +51338,7 @@ async function buildDocx(system,items,title){
    if(b.type==='p'){
     const s=classifyP1StructuralLine(b.text);
     if(s){
-     if(s.kind==='analysis'){ n.push(para([...inlineRuns(D,'Analysis: ',{bold:true,color:teal}),...inlineRuns(D,s.text)])); continue; }
+     if(s.kind==='analysis'){ n.push(para([...inlineRuns(D,t('Analysis: '),{bold:true,color:teal}),...inlineRuns(D,s.text)])); continue; }
      n.push(structuralCardDocx(s.kind,s.label,s.text),para('',{spacing:{after:100}})); continue;
     }
     n.push(para(inlineRuns(D,b.text))); continue;
@@ -51299,14 +51353,14 @@ async function buildDocx(system,items,title){
   return n;
  }
  const prompts=PROMPTS.filter(p=>items.some(o=>promptOf(o)===p)),tag=prompts.join('-')||'Complete',children=[];
- children.push(new D.Table({width:{size:100,type:D.WidthType.PERCENTAGE},borders:{top:{style:D.BorderStyle.NONE},bottom:{style:D.BorderStyle.NONE},left:{style:D.BorderStyle.NONE},right:{style:D.BorderStyle.NONE},insideHorizontal:{style:D.BorderStyle.NONE},insideVertical:{style:D.BorderStyle.NONE}},rows:[new D.TableRow({children:[new D.TableCell({shading:{type:D.ShadingType.CLEAR,fill:teal},margins:{top:900,bottom:900,left:420,right:420},children:[para(inlineRuns(D,'EACE.ai',{font:'Georgia',size:52,color:gold,bold:true}),{alignment:D.AlignmentType.CENTER,spacing:{after:240}}),para(inlineRuns(D,title||'Complete Regulatory Documentation',{font:'Georgia',size:34,color:white,bold:true}),{alignment:D.AlignmentType.CENTER,spacing:{after:200}}),para(inlineRuns(D,system.name||'AI System',{font:'Georgia',size:25,color:white}),{alignment:D.AlignmentType.CENTER,spacing:{after:260}}),para(inlineRuns(D,'PROMPTS '+tag+' | '+items.length+' REGULATORY ARTEFACTS',{size:17,color:gold,bold:true}),{alignment:D.AlignmentType.CENTER,spacing:{after:360}}),para(inlineRuns(D,'CONFIDENTIAL - Human review required before regulatory use',{size:15,color:white}),{alignment:D.AlignmentType.CENTER,spacing:{after:0}}),(()=>{const cst=placeholderStatsDocx(null),ctot=cst.A+cst.B+cst.C;return ctot?para(inlineRuns(D,cst.A+' of '+ctot+' outstanding fields require direct user input before submission',{size:13,color:white}),{alignment:D.AlignmentType.CENTER,spacing:{before:160,after:0}}):para('',{spacing:{after:0}})})()]})]})]}),para([new D.PageBreak()]));
- children.push(para(inlineRuns(D,'Document Overview',{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));children.push(table([['Document','System','Included prompts','Artefacts'],[title||'Complete Regulatory Documentation',system.name||'AI System',tag,String(items.length)]]),para([new D.PageBreak()]));
+ children.push(new D.Table({width:{size:100,type:D.WidthType.PERCENTAGE},borders:{top:{style:D.BorderStyle.NONE},bottom:{style:D.BorderStyle.NONE},left:{style:D.BorderStyle.NONE},right:{style:D.BorderStyle.NONE},insideHorizontal:{style:D.BorderStyle.NONE},insideVertical:{style:D.BorderStyle.NONE}},rows:[new D.TableRow({children:[new D.TableCell({shading:{type:D.ShadingType.CLEAR,fill:teal},margins:{top:900,bottom:900,left:420,right:420},children:[para(inlineRuns(D,'EACE.ai',{font:'Georgia',size:52,color:gold,bold:true}),{alignment:D.AlignmentType.CENTER,spacing:{after:240}}),para(inlineRuns(D,title||t('Complete Regulatory Documentation'),{font:'Georgia',size:34,color:white,bold:true}),{alignment:D.AlignmentType.CENTER,spacing:{after:200}}),para(inlineRuns(D,system.name||t('AI System'),{font:'Georgia',size:25,color:white}),{alignment:D.AlignmentType.CENTER,spacing:{after:260}}),para(inlineRuns(D,'PROMPTS '+tag+' | '+items.length+' REGULATORY ARTEFACTS',{size:17,color:gold,bold:true}),{alignment:D.AlignmentType.CENTER,spacing:{after:360}}),para(inlineRuns(D,t('CONFIDENTIAL - Human review required before regulatory use'),{size:15,color:white}),{alignment:D.AlignmentType.CENTER,spacing:{after:0}}),(()=>{const cst=placeholderStatsDocx(null),ctot=cst.A+cst.B+cst.C;return ctot?para(inlineRuns(D,cst.A+(docLang==='Croatian'?' od '+ctot+' preostalih polja zahtijeva izravan korisnički unos prije predaje':' of '+ctot+' outstanding fields require direct user input before submission'),{size:13,color:white}),{alignment:D.AlignmentType.CENTER,spacing:{before:160,after:0}}):para('',{spacing:{after:0}})})()]})]})]}),para([new D.PageBreak()]));
+ children.push(para(inlineRuns(D,t('Document Overview'),{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));children.push(table([[t('Document'),t('System'),t('Included prompts'),t('Artefacts')],[title||t('Complete Regulatory Documentation'),system.name||t('AI System'),tag,String(items.length)]]),para([new D.PageBreak()]));
  // Pillar Completion Overview -- upfront, at-a-glance dashboard for every pillar in this
  // export, right after Document Overview, not buried deep inside whichever page the
  // pillar's own Executive Summary output happens to fall on.
  if(prompts.length){
-  children.push(para(inlineRuns(D,'Pillar Completion Overview',{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));
-  children.push(para(inlineRuns(D,'At-a-glance completion status for each regulatory pillar included in this document. The detailed narrative executive summary for each pillar follows within that section.'),{}));
+  children.push(para(inlineRuns(D,t('Pillar Completion Overview'),{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));
+  children.push(para(inlineRuns(D,t('At-a-glance completion status for each regulatory pillar included in this document. The detailed narrative executive summary for each pillar follows within that section.')),{}));
   children.push(legendParaDocx());
   for(const p of prompts){
    children.push(para(inlineRuns(D,p+' — '+(LABEL[p]||''),{font:'Georgia',size:25,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_2,alignment:D.AlignmentType.LEFT,spacing:{before:200,after:90},keepNext:true}));
@@ -51315,9 +51369,9 @@ async function buildDocx(system,items,title){
   children.push(para([new D.PageBreak()]));
  }
  if(prompts.includes('P1')){ children.push(...executiveDashboardDocx()); children.push(...classificationDecisionRecordDocx()); }
- children.push(para(inlineRuns(D,'Contents',{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));for(const p of prompts)children.push(para(inlineRuns(D,p+' - '+LABEL[p],{bold:true,color:'1A5A73'}),{alignment:D.AlignmentType.LEFT}));children.push(para([new D.PageBreak()]));
+ children.push(para(inlineRuns(D,t('Contents'),{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));for(const p of prompts)children.push(para(inlineRuns(D,p+' - '+LABEL[p],{bold:true,color:'1A5A73'}),{alignment:D.AlignmentType.LEFT}));children.push(para([new D.PageBreak()]));
  let cur='';for(const o of items){const p=promptOf(o);if(p!==cur){if(cur)children.push(para([new D.PageBreak()]));cur=p;children.push(para(inlineRuns(D,p+' - '+LABEL[p],{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));}
-  children.push(para(inlineRuns(D,String(o.code||o.outputId||o.outputNumber||'Document')+' - '+String(o.title||'Untitled artefact'),{font:'Georgia',size:27,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_2,alignment:D.AlignmentType.LEFT,spacing:{before:220,after:80},keepNext:true}));if(o.article)children.push(table([['LEGAL BASIS',o.article]]));if(p&&SUMMARY_CODES_DOCX[p]===o.code)children.push(...summaryDashboard(p));children.push(...(p==='P1'?blockNodesP1Styled(parseMd(o.content||'')):blockNodes(parseMd(o.content||''))))}
+  children.push(para(inlineRuns(D,String(o.code||o.outputId||o.outputNumber||'Document')+' - '+String(o.title||t('Untitled artefact')),{font:'Georgia',size:27,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_2,alignment:D.AlignmentType.LEFT,spacing:{before:220,after:80},keepNext:true}));if(o.article)children.push(table([[t('LEGAL BASIS'),o.article]]));if(p&&SUMMARY_CODES_DOCX[p]===o.code)children.push(...summaryDashboard(p));children.push(...(p==='P1'?blockNodesP1Styled(parseMd(o.content||'')):blockNodes(parseMd(o.content||''))))}
  const doc=new D.Document({creator:'EACE.ai',title:title||'Complete Regulatory Documentation',description:'EACE.ai regulatory documentation',styles:{default:{document:{run:{font:'Arial',size:20,color:ink},paragraph:{spacing:{line:240,after:90}}}}},sections:[{properties:{page:{margin:{top:850,right:850,bottom:850,left:850}}},children}]});return await D.Packer.toBlob(doc);
 }
 async function buildPdf(system,items,title){
