@@ -6507,9 +6507,18 @@ function restoreExecutionInputSnapshot(snapshot){
   return true;
 }
 function getExecutionInputData(){
-  return (exec&&exec.inputSnapshot&&typeof exec.inputSnapshot==='object')
+  const base = (exec&&exec.inputSnapshot&&typeof exec.inputSnapshot==='object')
     ? exec.inputSnapshot
     : st.data;
+  // Live Organisation Profile fallback (applyOrgLiveFallback, defined near
+  // resolveCanonicalField): applied on every read, not baked into the
+  // snapshot, so this is the single point through which every consumer of
+  // execution input data (buildIntakeContext, buildOverlayExecutionContext,
+  // and anything else that calls getExecutionInputData) sees the current
+  // Organisation Profile as a fallback for any per-system contact field the
+  // user has not explicitly filled in — including a system created, or a
+  // run started, before the Organisation Profile held that value.
+  return (typeof applyOrgLiveFallback==='function') ? applyOrgLiveFallback(base) : base;
 }
 
 function saveExecState(){
@@ -10497,6 +10506,7 @@ const MASTER_GROUPS = [
       {id:'complianceOfficer',type:'textarea',label:'Compliance Officer — name, role & contact', placeholder:'e.g. Anita Slogar, CCO · compliance@example.hr · +385 1 555 0192', rows:2, legal:'AI Act Art. 30 & Art. 49'},
       {id:'legalCounsel',  type:'textarea',label:'Legal Counsel — name & contact',       placeholder:'e.g. Anita Slogar, Senior Legal Counsel · legal@example.hr', rows:2, legal:'AI Act Art. 25'},
       {id:'dpo',           type:'textarea',label:'DPO — name & contact',                 placeholder:'e.g. Anita Slogar, DPO · dpo@example.hr', rows:2, cond:d=>d.personalData, legal:'GDPR Art. 37'},
+      {id:'technicalOwner',type:'textarea',label:'Technical Owner / CTO — name & contact', placeholder:'e.g. Val Vidaković, CTO · cto@example.hr', rows:2, legal:'AI Act Art. 9 & Annex IV'},
       {id:'nis2Provider',  type:'dd',      label:'NIS2 classification — Provider',        options:['Essential entity','Important entity','Not classified'],
        note:true, notePh:'e.g. Important entity — managed service provider and critical ICT software vendor', legal:'NIS2 Dir. 2022/2555 Art. 21'},
       {id:'providerPackageRef',type:'text',label:'P2A execution / package reference',    placeholder:'e.g. P2A-2026-001-RISKSCALE', legal:'AI Act Art. 18 (technical documentation reference)'},
@@ -12474,6 +12484,8 @@ function buildIntakeContext(d, pillar){
   if(d.complianceOfficer)   lines.push(`Compliance officer: ${d.complianceOfficer}`);
   if(d.legalCounsel)        lines.push(`Legal counsel: ${d.legalCounsel}`);
   if(d.dpo)                 lines.push(`DPO: ${d.dpo}`);
+  if(d.technicalOwner)      lines.push(`Technical owner / CTO: ${d.technicalOwner}`);
+  if(d.riskOwner)           lines.push(`Risk owner: ${d.riskOwner}`);
   // Deployer
   if(d.deployerName)        lines.push(`Deployer: ${d.deployerName}`);
   if(d.deployerType)        lines.push(`Deployer type: ${d.deployerType}`);
@@ -13729,20 +13741,12 @@ function transitionAssessment(sys, asmId, newStatus, reason){
 //   1. Check assessment overrides first
 //   2. Fall back to Master System Profile
 function resolveField(sys, asm, fieldId){
-  // Check override
-  if(asm && asm.overrides){
-    const override = asm.overrides.find(function(o){return o.field===fieldId;});
-    if(override) return override.overrideValue;
-  }
-  // Fall back to profile (SSoT)
-  if(sys.profile && sys.profile[fieldId] !== undefined){
-    return sys.profile[fieldId];
-  }
-  // Legacy: fall back to sys.data for backwards compat
-  if(sys.data && sys.data[fieldId] !== undefined){
-    return sys.data[fieldId];
-  }
-  return undefined;
+  // Thin backward-compatible wrapper: resolveCanonicalField (defined further
+  // down, near the Organisation Profile) is the actual single-source-of-truth
+  // resolver — override → system profile → live Organisation Profile
+  // fallback. Kept under this name only because addAssessmentOverride still
+  // calls it by this name.
+  return resolveCanonicalField(sys, asm, fieldId);
 }
 
 // Log a profile override for a specific assessment
@@ -14403,6 +14407,8 @@ const ORG_PROFILE_SCHEMA = {
   legalEmail:       '',   // Legal email
   ctoName:          '',   // CTO / Technical contact
   ctoEmail:         '',   // CTO email
+  riskOwnerName:    '',   // Risk Owner / Chief Risk Officer
+  riskOwnerEmail:   '',   // Risk Owner email
 
   // Organisation-wide regulatory identity
   gdprLead:         '',   // Lead supervisory authority / DPA, where established
@@ -14448,18 +14454,82 @@ function loadOrgProfile(){
   }catch(e){}
 }
 
-// ── Resolve org field for a system ──
-// Priority: system profile override → system profile → org profile
-function resolveOrgField(sys, fieldId){
-  // Check system profile first (system-level override)
-  if(sys && sys.profile && sys.profile[fieldId] !== undefined && sys.profile[fieldId] !== ''){
-    return {value: sys.profile[fieldId], source: 'system'};
+// ── Canonical org-fallback resolution — single source of truth ──
+// The live, actually-rendered per-system Master Profile fields (provName,
+// provAddress, provCountry, complianceOfficer, legalCounsel, dpo,
+// technicalOwner, deployerName — see MASTER_GROUPS "Provider Profile" /
+// "Deployer Profile") are freeform single-field contacts ("Name · role ·
+// email · phone" in one string), while the Organisation Profile
+// (ORG_PROFILE_SCHEMA) stores name and email as separate fields per role.
+// A per-system field and its org-level equivalent are therefore not the
+// same field ID — this table is the ONE place that maps between them and
+// composes an org-level fallback string when the system-level field is
+// empty. Previously this mapping did not exist at all: inheritOrgIntoSystem
+// wrote org values into invented field IDs (providerOrg, providerContact,
+// deployerContact, ...) that no output-generation code ever read, so an
+// Organisation Profile edit never reached a generated document regardless
+// of whether the system was created before or after the edit.
+function composeOrgContact(name, email){
+  var parts = [name, email].filter(Boolean);
+  return parts.length ? parts.join(' · ') : '';
+}
+const ORG_FALLBACK_COMPOSERS = {
+  provName:         function(org){ return org.orgName; },
+  provAddress:      function(org){ return org.orgAddress; },
+  provCountry:      function(org){ return org.orgCountry; },
+  deployerName:     function(org){ return org.orgName; },
+  complianceOfficer:function(org){ return composeOrgContact(org.complianceName, org.complianceEmail); },
+  legalCounsel:     function(org){ return composeOrgContact(org.legalName, org.legalEmail); },
+  dpo:              function(org){ return composeOrgContact(org.dpoName, org.dpoEmail); },
+  technicalOwner:   function(org){ return composeOrgContact(org.ctoName, org.ctoEmail); },
+  riskOwner:        function(org){ return composeOrgContact(org.riskOwnerName, org.riskOwnerEmail); },
+};
+// resolveCanonicalField: the single resolver for "what is this field's
+// effective value for this system", honouring — in priority order — an
+// assessment-specific override (asm.overrides, where an assessment is
+// supplied), the system's own Master Profile value, and a LIVE fallback to
+// the current Organisation Profile (never a value baked in at system-
+// creation time, so editing the Organisation Profile takes effect on every
+// subsequent generation for every existing system, per Organisation Profile
+// as a living default rather than a one-time copy). Supersedes the
+// assessment/override half of resolveField (kept as a thin wrapper below
+// for its one existing caller) and the org-only, never-called
+// resolveOrgField (removed — this function replaces it).
+function resolveCanonicalField(sys, asm, fieldId){
+  if(asm && asm.overrides){
+    const override = asm.overrides.find(function(o){return o.field===fieldId;});
+    if(override && override.overrideValue!==undefined && override.overrideValue!=='') return override.overrideValue;
   }
-  // Fall back to Organisation Profile
-  if(WORKSPACE.orgProfile && WORKSPACE.orgProfile[fieldId] !== undefined && WORKSPACE.orgProfile[fieldId] !== ''){
-    return {value: WORKSPACE.orgProfile[fieldId], source: 'org'};
+  if(sys){
+    if(sys.profile && sys.profile[fieldId]!==undefined && sys.profile[fieldId]!=='') return sys.profile[fieldId];
+    if(sys.data && sys.data[fieldId]!==undefined && sys.data[fieldId]!=='') return sys.data[fieldId];
   }
-  return {value: '', source: 'none'};
+  const composer = ORG_FALLBACK_COMPOSERS[fieldId];
+  if(composer && WORKSPACE.orgProfile){
+    const v = composer(WORKSPACE.orgProfile);
+    if(v) return v;
+  }
+  return undefined;
+}
+// applyOrgLiveFallback: same live-fallback logic as resolveCanonicalField,
+// applied to the flat intake-data object (d) that buildIntakeContext and
+// buildOverlayExecutionContext read — the actual path a generation run
+// takes (getExecutionInputData → buildIntakeContext), which works with a
+// merged plain object rather than a system+assessment pair. Returns d
+// unchanged (no clone) when no field actually needs a fallback, so this is
+// a no-op on ordinary reads once a system's own fields are filled in.
+function applyOrgLiveFallback(d){
+  if(!d || !WORKSPACE.orgProfile) return d;
+  const org = WORKSPACE.orgProfile;
+  let out = null;
+  Object.keys(ORG_FALLBACK_COMPOSERS).forEach(function(fieldId){
+    if(d[fieldId]!==undefined && d[fieldId]!=='') return;
+    const v = ORG_FALLBACK_COMPOSERS[fieldId](org);
+    if(!v) return;
+    if(!out) out = Object.assign({}, d);
+    out[fieldId] = v;
+  });
+  return out || d;
 }
 
 // ── Set org profile field ──
@@ -14477,31 +14547,23 @@ function inheritOrgIntoSystem(sys){
   if(!WORKSPACE.orgProfile) return;
   const org = WORKSPACE.orgProfile;
   if(!sys.profile) sys.profile = {};
-  // Only set if not already defined in the system profile
-  const inheritMap = {
-    providerOrg:     org.orgName,
-    providerCountry: org.orgCountry,
-    providerLegal:   org.orgLegal,
-    providerContact: org.complianceEmail || org.dpoEmail,
-    deployerOrg:     org.orgName,
-    deployerCountry: org.orgCountry,
-    deployerLegal:   org.orgLegal,
-    deployerContact: org.complianceEmail || org.dpoEmail,
-    dpoName:         org.dpoName,
-    dpoEmail:        org.dpoEmail,
-    providerRegistration: org.orgRegistration,
-    providerTaxId:       org.orgTaxId,
-    providerVatId:       org.orgVatId,
-    providerEuid:        org.orgEuid,
-    providerLei:         org.orgLei,
-    providerAddress:     org.orgAddress,
-    providerWebsite:     org.orgWebsite,
-  };
-  Object.keys(inheritMap).forEach(function(key){
-    if(!sys.profile[key] && inheritMap[key]){
-      sys.profile[key] = inheritMap[key];
-      if(sys.data) sys.data[key] = inheritMap[key];
-    }
+  // One-time convenience pre-fill, using the exact same field IDs and
+  // composers as the live fallback (ORG_FALLBACK_COMPOSERS / resolveCanonicalField
+  // / applyOrgLiveFallback below) — previously this wrote org values into
+  // invented field IDs (providerOrg, providerContact, deployerContact, ...)
+  // that no output-generation code ever read under those names, so an
+  // Organisation Profile could be fully completed and a generated document
+  // would still show none of it. This copy is now purely a convenience so a
+  // freshly created system's Master Profile form shows non-empty, editable
+  // defaults; it is not what makes generation see the org data — the live
+  // fallback does that unconditionally, including for systems created before
+  // this ran or before the Organisation Profile was filled in.
+  Object.keys(ORG_FALLBACK_COMPOSERS).forEach(function(fieldId){
+    if(sys.profile[fieldId]) return;
+    const v = ORG_FALLBACK_COMPOSERS[fieldId](org);
+    if(!v) return;
+    sys.profile[fieldId] = v;
+    if(sys.data) sys.data[fieldId] = v;
   });
 }
 
@@ -14574,6 +14636,8 @@ function renderOrgProfile(){
         {id:'legalEmail',      label:'Legal email',                                  ph:'legal@organisation.eu'},
         {id:'ctoName',         label:'CTO / Technical contact',                      ph:'Full name'},
         {id:'ctoEmail',        label:'CTO email',                                    ph:'cto@organisation.eu'},
+        {id:'riskOwnerName',   label:'Risk Owner / Chief Risk Officer',              ph:'Full name'},
+        {id:'riskOwnerEmail',  label:'Risk Owner email',                             ph:'risk@organisation.eu'},
       ], org)
 
     // Section: Organisation-wide regulatory identity.
@@ -14957,12 +15021,14 @@ function seedTallinnSystem(){
     annualPersons:    '100,001\u20131,000,000',
     marketDate:       '2025-03-01',
     deploymentDate:   '2025-06-01',
-    // ORG (provider)
-    providerOrg:      'Nordic Urban Systems O\u00dc',
-    providerCountry:  'Estonia',
-    providerLegal:    'O\u00dc (private limited company, Estonian law)',
-    deployerOrg:      'Tallinn City Transport Authority',
-    deployerCountry:  'Estonia',
+    // ORG (provider) \u2014 field IDs must match what buildIntakeContext actually
+    // reads (provName/provCountry/deployerName), not the invented names this
+    // seed previously used, or this demo system would silently show the same
+    // "provider/deployer facts never reach the model" bug the fix corrects.
+    provName:         'Nordic Urban Systems O\u00dc',
+    provCountry:      'Estonia',
+    deployerName:     'Tallinn City Transport Authority',
+    deployerCountry:  ['Estonia'],
     // GEO
     deploymentCountries: ['Estonia','Finland','Latvia'],
     memberStates:        ['Estonia','Finland','Latvia'],
