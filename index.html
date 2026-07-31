@@ -11190,9 +11190,27 @@ const MASTER_GROUPS_EXT2 = [
        placeholder:'e.g. ISO/IEC 23894:2023 (AI Risk Management) integrated into NIST AI RMF 1.0',
        legal:'AI Act Art. 9'},
       {id:'riskOwner',      type:'text', label:'Risk owner', placeholder:'e.g. Chief Risk Officer', legal:'AI Act Art. 9'},
+      {id:'technicalRiskLead',type:'text',label:'Technical risk lead (model/system-level)',
+       placeholder:'e.g. Lead ML Engineer — model drift, robustness and technical risk monitoring', legal:'AI Act Art. 9 & Annex IV §2'},
+      {id:'gpaiInterfaceRiskManager',type:'text',label:'GPAI interface risk manager',
+       placeholder:'e.g. Owner of risk arising from the underlying GPAI model/API dependency — or "N/A, no GPAI dependency"', cond:d=>d.gpaiDependency, legal:'AI Act Art. 9 & Art. 55'},
+      {id:'crossBorderRiskCoordinator',type:'text',label:'Cross-border risk coordinator',
+       placeholder:'e.g. Coordinates risk management across the Member States of deployment — or "N/A, single Member State"', cond:d=>d.crossBorder, legal:'AI Act Art. 9 & Art. 70'},
+      {id:'qmsRepresentative',type:'text',label:'QMS management representative',
+       placeholder:'e.g. Name/role holding overall QMS ownership and sign-off authority', legal:'AI Act Art. 17'},
       {id:'reviewFrequency',type:'dd',   label:'Risk review frequency',
        options:['Continuous','Monthly','Quarterly','Semi-annual','Annual','Event-triggered'],
        legal:'AI Act Art. 9(4)'},
+      {id:'dataStewardTraining',type:'text',label:'Data steward — training data',
+       placeholder:'e.g. Owner of training-dataset governance, provenance and quality (Art. 10)', legal:'AI Act Art. 10'},
+      {id:'dataStewardInference',type:'text',label:'Data steward — inference/operational data',
+       placeholder:'e.g. Owner of input-data governance at inference time in production', legal:'AI Act Art. 10 & Art. 26'},
+      {id:'dataStewardGpaiApi',type:'text',label:'Data steward — GPAI API data exchange',
+       placeholder:'e.g. Owner of data sent to/received from the underlying GPAI provider API — or "N/A, no GPAI dependency"', cond:d=>d.gpaiDependency, legal:'AI Act Art. 10 & Art. 53'},
+      {id:'docManagementSystemPath',type:'text',label:'Technical documentation location/reference',
+       placeholder:'e.g. Internal DMS path or URL where the Annex IV technical documentation set is maintained', legal:'AI Act Art. 11 & Annex IV'},
+      {id:'euDatabaseRegistrationNumber',type:'text',label:'EU database registration number',
+       placeholder:'e.g. Registration number issued after Art. 49/71 EU database registration — or "not yet registered"', legal:'AI Act Art. 49 & Art. 71'},
       {id:'internalTesting',type:'textarea',rows:3,label:'Internal testing performed to date',
        placeholder:'e.g. Unit testing, historical backtesting (2022-2025 cohorts), data leakage validation, stress testing under synthetic liquidity crises',
        legal:'AI Act Art. 9(8)'},
@@ -12493,6 +12511,16 @@ function buildIntakeContext(d, pillar){
   if(d.dpo)                 lines.push(`DPO: ${d.dpo}`);
   if(d.technicalOwner)      lines.push(`Technical owner / CTO: ${d.technicalOwner}`);
   if(d.riskOwner)           lines.push(`Risk owner: ${d.riskOwner}`);
+  if(d.technicalRiskLead)   lines.push(`Technical risk lead: ${d.technicalRiskLead}`);
+  if(d.gpaiInterfaceRiskManager) lines.push(`GPAI interface risk manager: ${d.gpaiInterfaceRiskManager}`);
+  if(d.crossBorderRiskCoordinator) lines.push(`Cross-border risk coordinator: ${d.crossBorderRiskCoordinator}`);
+  if(d.qmsRepresentative)   lines.push(`QMS management representative: ${d.qmsRepresentative}`);
+  if(d.dataStewardTraining) lines.push(`Data steward — training data: ${d.dataStewardTraining}`);
+  if(d.dataStewardInference)lines.push(`Data steward — inference data: ${d.dataStewardInference}`);
+  if(d.dataStewardGpaiApi)  lines.push(`Data steward — GPAI API data: ${d.dataStewardGpaiApi}`);
+  if(d.docManagementSystemPath) lines.push(`Technical documentation location: ${d.docManagementSystemPath}`);
+  if(d.euDatabaseRegistrationNumber) lines.push(`EU database registration number: ${d.euDatabaseRegistrationNumber}`);
+  if(d.regulatoryContactRegistry) lines.push(`Regulatory contact registry (per country):\n${d.regulatoryContactRegistry}`);
   // Deployer
   if(d.deployerName)        lines.push(`Deployer: ${d.deployerName}`);
   if(d.deployerType)        lines.push(`Deployer type: ${d.deployerType}`);
@@ -14419,6 +14447,7 @@ const ORG_PROFILE_SCHEMA = {
 
   // Organisation-wide regulatory identity
   gdprLead:         '',   // Lead supervisory authority / DPA, where established
+  regulatoryContactRegistry: '', // Per-country market surveillance / notifying / other competent authority contacts
 
   // Internal governance
   aiGovernanceOwner:'',   // Internal AI governance responsible
@@ -14490,6 +14519,25 @@ const ORG_FALLBACK_COMPOSERS = {
   dpo:              function(org){ return composeOrgContact(org.dpoName, org.dpoEmail); },
   technicalOwner:   function(org){ return composeOrgContact(org.ctoName, org.ctoEmail); },
   riskOwner:        function(org){ return composeOrgContact(org.riskOwnerName, org.riskOwnerEmail); },
+  // These three fall back to the general Risk Owner in the absence of a
+  // dedicated per-system role holder — no separate org-level field exists
+  // for each sub-role, so the general risk owner is the closest honest
+  // default rather than leaving generation with nothing at all.
+  technicalRiskLead:        function(org){ return composeOrgContact(org.riskOwnerName, org.riskOwnerEmail); },
+  gpaiInterfaceRiskManager: function(org){ return composeOrgContact(org.riskOwnerName, org.riskOwnerEmail); },
+  crossBorderRiskCoordinator:function(org){ return composeOrgContact(org.riskOwnerName, org.riskOwnerEmail); },
+  qmsRepresentative:function(org){ return org.aiGovernanceOwner; },
+  // dataStewardTraining / dataStewardInference / dataStewardGpaiApi,
+  // docManagementSystemPath and euDatabaseRegistrationNumber have no
+  // org-level equivalent (they are inherently system-specific — a training-
+  // data steward or a database registration number cannot be defaulted from
+  // an organisation-wide value) and are deliberately not listed here.
+  // regulatoryContactRegistry has no per-system field at all (it is
+  // org-wide only, by nature — the same national authority contact serves
+  // every system of the organisation in that country) — this composer is a
+  // direct passthrough so the live-fallback plumbing surfaces it for every
+  // system without a separate per-system copy of the same list.
+  regulatoryContactRegistry:function(org){ return org.regulatoryContactRegistry; },
 };
 // resolveCanonicalField: the single resolver for "what is this field's
 // effective value for this system", honouring — in priority order — an
@@ -14651,6 +14699,8 @@ function renderOrgProfile(){
     // NIS2 scope and ISO applicability/certification are assessed per AI system.
     + renderOrgSection('Regulatory Identity', [
         {id:'gdprLead', label:'Lead supervisory authority / DPA', ph:'Authority name and jurisdiction, where established'},
+        {id:'regulatoryContactRegistry', type:'textarea', rows:6, label:'Regulatory contact registry (per country)',
+         ph:'One line per country — e.g.\nCroatia — Market surveillance authority: Državni inspektorat · ai-nadzor@dirh.hr\nGermany — Marktüberwachungsbehörde: Bundesnetzagentur · ai-aufsicht@bnetza.de'},
       ], org)
     + '<div class="msp-notice" style="margin-top:-8px;margin-bottom:22px;">'
       +'<span class="msp-notice-icon">&#9432;</span>'
@@ -14681,7 +14731,7 @@ function renderOrgSection(title, fields, org){
     let ctrl = '';
 
     if(f.type==='textarea'){
-      ctrl = '<textarea class="ctrl-textarea" id="'+esc(fldDomId)+'" rows="2" placeholder="'+(f.ph?esc(f.ph):'')+'" '
+      ctrl = '<textarea class="ctrl-textarea" id="'+esc(fldDomId)+'" rows="'+(f.rows||2)+'" placeholder="'+(f.ph?esc(f.ph):'')+'" '
         +'onblur="setOrgField('+aj(f.id)+',this.value)">'+esc(val)+'</textarea>';
     } else if(f.type==='select'){
       const opts=(f.opts||[]).map(function(o){
