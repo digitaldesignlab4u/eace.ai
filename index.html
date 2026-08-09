@@ -8284,6 +8284,109 @@ function renderOutputContent(content, style){
   return '<div class="output-doc-render">'+html+'</div>';
 }
 
+// ── P1 EXECUTIVE SUMMARY CARD — parses the badge/status vocabulary this
+// app already mandates (buildSharedStructuralRules' VISUAL CLASSIFICATION
+// BADGES, P1's MANDATORY STATUS VOCABULARY, the ROUTE TO ... / Legal
+// Route: format) out of stored P1 output text, for an at-a-glance card in
+// renderOutputView(). Reads OTL (Traffic Light Summary) and OCL
+// (Compliance Checklist) preferentially — both are
+// CORE_P1_CLASSIFICATION_CODES outputs, generated first, always in the
+// full (non-brief) format, so they reliably carry the mandated tokens —
+// and O21 (Executive Summaries A-D) as a secondary source for Annex III
+// triggers and a narrative fallback, since O21 is a brief-format output
+// (see isP1BriefOutput) whose exact wording is less predictable. Returns
+// null/empty fields rather than a fabricated placeholder where a pattern
+// genuinely isn't found: this is a best-effort read of LLM-generated
+// text, not a guaranteed-structured data source.
+function parseP1ExecutiveSummary(sys){
+  if(!sys) return null;
+  const gen = sys.generatedOutputs||[];
+  const byCode = code => gen.find(o=>o.code===code && (o.state==='done'||o.state==='complete') && String(o.content||'').trim());
+  const otl = byCode('OTL'), ocl = byCode('OCL'), o21 = byCode('O21');
+  if(!otl && !ocl && !o21) return null;
+
+  const otlText = otl ? String(otl.content) : '';
+  const oclText = ocl ? String(ocl.content) : '';
+  const o21Text = o21 ? String(o21.content) : '';
+  const allText = [otlText, oclText, o21Text].join('\n\n');
+
+  // Badge token -> traffic-light display label. Presentation simplification
+  // only: P1's own governance rules (buildGlobalRegulatoryGovernance
+  // Section 4, "MANDATORY STATUS VOCABULARY") explicitly forbid "GO" /
+  // "CONDITIONAL GO" / "APPROVED" as a P1 classification — P1 has no
+  // authority to approve deployment, so that vocabulary never appears in
+  // the generated text itself. This card translates the real, compliant
+  // badge into a familiar at-a-glance label for this UI only; it must
+  // never be exported, quoted, or treated as the P1 determination itself.
+  const BADGE_ORDER = [
+    {token:'[PROHIBITED]',   tl:'NO-GO',       color:'var(--red-bright)'},
+    {token:'[HIGH-RISK]',    tl:'CONDITIONAL', color:'var(--amber)'},
+    {token:'[LIMITED-RISK]', tl:'CONDITIONAL', color:'var(--amber)'},
+    {token:'[MINIMAL-RISK]', tl:'GO',          color:'var(--green)'},
+    {token:'[OUT-OF-SCOPE]', tl:'GO',          color:'var(--green)'},
+  ];
+  let badge = null;
+  for(const b of BADGE_ORDER){ if(otlText.includes(b.token) || allText.includes(b.token)){ badge = b; break; } }
+
+  // Risk classification: the exact status-vocabulary phrase, if present.
+  const statusMatch = allText.match(/PROHIBITED PRACTICE\s*—\s*STOP|HIGH-RISK\s*—\s*ARTICLE\s*6\(1\)[^\n.;]*|HIGH-RISK\s*—\s*ARTICLE\s*6\(2\)[^\n.;]*|NOT HIGH-RISK[^\n.;]*|CLASSIFICATION UNRESOLVED|HUMAN VALIDATION REQUIRED|IN SCOPE\b|OUT OF SCOPE\b/i);
+  const riskClassification = statusMatch ? statusMatch[0].trim() : null;
+
+  // Annex III triggers: every distinct "Annex III, Point X" reference.
+  const annexMatches = [...allText.matchAll(/Annex\s*III,?\s*Point\s*([0-9]+(?:\([a-z0-9]+\))?)/gi)];
+  const annexIIITriggers = [...new Set(annexMatches.map(m=>m[1]))];
+
+  // Routing decision: the mandated "ROUTE TO ..." token plus its Legal Route line.
+  const routeMatch = allText.match(/ROUTE TO (P2A|P2B|P3|P4|SPECIALIST REVIEW)/i);
+  const legalRouteMatch = allText.match(/Legal Route:\s*([^\n]+)/i);
+  const routing = routeMatch ? {
+    next: routeMatch[1].toUpperCase(),
+    legalRoute: legalRouteMatch ? legalRouteMatch[1].trim() : null,
+  } : null;
+
+  // Key obligations: best-effort. Pull checklist-style lines carrying a
+  // status badge from OCL, capped at 8; fall back to the first couple of
+  // paragraphs of O21 if OCL isn't available. Left empty (not fabricated)
+  // if neither source yields anything usable.
+  let keyObligations = [];
+  if(oclText){
+    const lines = oclText.split('\n').filter(l=>/\[(CONFIRMED|ACTION-REQUIRED|WARNING|DOCUMENTATION-REQUIRED|NOT-APPLICABLE)\]/.test(l));
+    keyObligations = lines.slice(0,8).map(l=>l.replace(/^\s*[-*|]\s*/,'').trim()).filter(Boolean);
+  }
+  if(!keyObligations.length && o21Text){
+    keyObligations = o21Text.split(/\n{2,}/).map(p=>p.trim()).filter(p=>p && !/^#/.test(p)).slice(0,3);
+  }
+
+  return {
+    hasData: !!(badge || riskClassification || routing),
+    badge, riskClassification, annexIIITriggers, routing, keyObligations,
+    sourceOutputs: {otl:!!otl, ocl:!!ocl, o21:!!o21},
+  };
+}
+
+function renderP1SummaryCard(sys){
+  const parsed = parseP1ExecutiveSummary(sys);
+  if(!parsed || !parsed.hasData) return '';
+  const b = parsed.badge;
+  const sourceLabels = [parsed.sourceOutputs.otl&&'Traffic Light Summary',parsed.sourceOutputs.ocl&&'Compliance Checklist',parsed.sourceOutputs.o21&&'Executive Summaries A-D'].filter(Boolean).join(', ');
+  return `<div class="ov-card" style="margin:16px 24px 0;border-left:3px solid ${b?b.color:'var(--border)'};">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        ${b?`<div title="Presentation label only — not the P1 legal determination" style="font-family:var(--font-mono);font-size:20px;font-weight:700;color:${b.color};letter-spacing:0.04em;">${b.tl}</div>`:''}
+        <div>
+          <div style="font-family:var(--font-mono);font-size:9px;letter-spacing:0.14em;text-transform:uppercase;color:var(--faint);">P1 classification — at a glance</div>
+          <div style="font-size:13px;color:var(--ink);margin-top:2px;">${esc(parsed.riskClassification||'Classification pending')}</div>
+        </div>
+      </div>
+      ${parsed.routing?`<div style="text-align:right;"><div style="font-family:var(--font-mono);font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--faint);">Routes to</div><div style="font-size:14px;font-weight:600;color:var(--gold);">${esc(parsed.routing.next)}</div></div>`:''}
+    </div>
+    ${parsed.annexIIITriggers.length?`<div style="margin-bottom:10px;"><div style="font-family:var(--font-mono);font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--faint);margin-bottom:4px;">Annex III triggers</div><div style="display:flex;gap:6px;flex-wrap:wrap;">${parsed.annexIIITriggers.map(t=>`<span style="font-family:var(--font-mono);font-size:10.5px;color:var(--ink);background:var(--panel);border:0.5px solid var(--border);border-radius:3px;padding:2px 8px;">Point ${esc(t)}</span>`).join('')}</div></div>`:''}
+    ${parsed.keyObligations.length?`<div><div style="font-family:var(--font-mono);font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--faint);margin-bottom:4px;">Key obligations</div><ul style="margin:0;padding-left:18px;font-size:12px;color:var(--muted);line-height:1.7;">${parsed.keyObligations.map(o=>`<li>${esc(o)}</li>`).join('')}</ul></div>`:''}
+    ${parsed.routing&&parsed.routing.legalRoute?`<div style="margin-top:10px;font-size:11px;color:var(--faint);font-family:var(--font-mono);">${esc(parsed.routing.legalRoute)}</div>`:''}
+    <div style="margin-top:10px;font-size:10px;color:var(--faint);font-style:italic;">Parsed from ${esc(sourceLabels)} — read the full output for the authoritative determination and legal basis.</div>
+  </div>`;
+}
+
 // ── OVERRIDE renderOutputView TO SHOW REAL CONTENT ──
 function renderOutputView(){
   const ws = document.getElementById('engine-workspace');
@@ -8317,6 +8420,7 @@ function renderOutputView(){
       ${['P1','P2A','P2B','P3','P4'].map(p=>`<button class="pillar-tab${st.pillar===p?' active':''}" onclick="switchPillar('${p}');st.view='intake';" style="${st.pillar===p?`border-color:rgba(${hexToRgb(ENGINE_COLORS[p])},0.4);background:rgba(${hexToRgb(ENGINE_COLORS[p])},0.08);`:''}"><span class="pillar-dot" style="background:${ENGINE_COLORS[p]};"></span>${p}</button>`).join('<div class="pillar-sep"></div>')}
       <button class="pillar-dash-link" onclick="if(sw&&sw.activeSystem){sw.tab='overview';switchTab('systems',document.querySelector('[data-tab=systems]'));}else{switchTab('systems',document.querySelector('[data-tab=systems]'));}"><- Dashboard</button>
     </div>
+    ${st.pillar==='P1' ? renderP1SummaryCard(sys) : ''}
     <div class="output-view">
       <div class="output-header">
         ${(!st.apiKey&&!st.claudeMode)?'<div class="sim-mode-banner">&#9888; Assessment Engine not connected -- add an API key in Workspace Settings for real compliance documentation.</div>':''}
