@@ -9133,12 +9133,18 @@ function renderSWExport(sys){
       </div>
       <button type="button" class="btn-continue" onclick="exportRegulatoryZIP('${sys.id}')">Download complete ZIP package &rarr;</button>
     </div>
-    <div style="font-family:var(--font-mono),monospace;font-size:9.5px;letter-spacing:0.14em;text-transform:uppercase;color:var(--gold-2);margin-bottom:6px;">Export centre — ${esc(sys.name)}</div><div style="font-size:11.5px;color:var(--muted);margin-bottom:14px;max-width:820px;line-height:1.55;">Choose a human-readable document package or a machine-readable data export. JSON and JSON-LD contain structured system data; they are not document packages.</div>
+    <div style="font-family:var(--font-mono),monospace;font-size:9.5px;letter-spacing:0.14em;text-transform:uppercase;color:var(--gold-2);margin-bottom:6px;">Export centre — ${esc(sys.name)}</div><div style="font-size:11.5px;color:var(--muted);margin-bottom:14px;max-width:820px;line-height:1.55;">Nine audience-specific packages, each a real filtered subset of this system's generated documents — not the same complete package under different labels. Click a package for the full folder (.zip); use DOC / PDF for a single consolidated file instead. JSON and JSON-LD below contain structured system data; they are not document packages.</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px;">
-      ${EXPORT_PACKAGES.map(p=>`<div class="ec-pkg" style="cursor:pointer;" onclick="swExportPackage('${p.id}')">
-        <div class="ec-pkg-title">${esc(p.title)}</div>
-        <div class="ec-pkg-desc">${esc(p.desc)}</div>
-        <div class="ec-pkg-audience">${esc(p.audience)}</div>
+      ${EXPORT_AUDIENCES.map(a=>`<div class="ec-pkg" style="cursor:pointer;" onclick="swExportAudiencePackage('${a.id}','zip')">
+        <div class="ec-pkg-title">${esc(a.label)}</div>
+        <div class="ec-pkg-desc">${esc(a.desc)}</div>
+        <div class="ec-pkg-audience" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <span>&#8595; .zip package</span>
+          <span style="display:flex;gap:6px;">
+            <button type="button" class="ea-btn-secondary" style="font-size:9px;padding:3px 8px;" onclick="event.stopPropagation();swExportAudiencePackage('${a.id}','docx')">DOC</button>
+            <button type="button" class="ea-btn-secondary" style="font-size:9px;padding:3px 8px;" onclick="event.stopPropagation();swExportAudiencePackage('${a.id}','pdf')">PDF</button>
+          </span>
+        </div>
       </div>`).join('')}
     </div>
     <div style="font-family:var(--font-mono),monospace;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--faint);margin-bottom:10px;">Standard formats</div>
@@ -13928,6 +13934,95 @@ const EXPORT_AUDIENCES = [
 ];
 
 const EXPORT_FORMATS = ['HTML','DOCX','PDF','Markdown','JSON','CSV','ZIP'];
+
+// Audience-specific output filter — the actual content differentiation
+// EXPORT_AUDIENCES previously had no code path for at all: every card in
+// renderSWExport() dispatched through swExportPackage(), which only
+// special-cased 'board' and 'audit' and sent every other audience id
+// (including 'legal', 'compliance', 'technical', 'notified_body',
+// 'vendor_dd') to the exact same full regulatory ZIP — so a "Technical
+// Package" and a "Vendor Due Diligence Package" downloaded byte-identical
+// content under different labels.
+//
+// Matched by category keyword rather than a fixed per-code allowlist
+// because each pillar (P1/P2A/P2B/P3/P4) has its own output catalogue with
+// its own `cat` values — a hardcoded output-code list would need separate
+// upkeep per pillar and silently go stale as outputs are added. This is a
+// genuine, reasoned subset per audience, not a perfect legal taxonomy: it
+// is meant to save a recipient from wading through the full package, not
+// to be the last word on what a Notified Body or auditor needs — the
+// Complete Regulatory Package remains available for anyone who wants
+// everything.
+function audienceOutputFilter(audienceId){
+  const always = o => /^(OTL|OCL|O21)$/.test(o.code||'') || /executive summar/i.test(o.title||'');
+  const cat   = o => String(o.cat||'').toLowerCase();
+  const title = o => String(o.title||'').toLowerCase();
+  switch(audienceId){
+    case 'board':
+    case 'executive':
+      return o => always(o) || /summary|executive/.test(cat(o));
+    case 'legal':
+      return o => always(o) || /legal|classification|conformity|fria|data protection/.test(cat(o));
+    case 'technical':
+      return o => always(o) || /core file|quality|technical|security|cybersecurity|gpai/.test(cat(o));
+    case 'auditor':
+      return o => always(o) || /audit|evidence|tracking/.test(cat(o));
+    case 'notified_body':
+      return o => always(o) || /conformity/.test(cat(o)) || /declaration of conformity|ce marking|annex iv|annex vi|annex vii|registration|verification/.test(title(o));
+    case 'vendor_dd':
+      return o => always(o) || /handover|regulatory/.test(cat(o)) || /responsibilit|declaration of conformity|certificat|data governance|audit trail/.test(title(o));
+    case 'compliance':
+      // Broadest audience short of literally everything: every output that
+      // carries a legal basis, excluding raw machine-readable exports
+      // (those are a format, not compliance-package content).
+      return o => !/^CSV-/.test(o.code||'') && !/export/.test(cat(o));
+    case 'complete':
+    default:
+      return () => true;
+  }
+}
+
+// Generates and downloads a real, audience-filtered package — reuses the
+// same canonical renderer as the rest of the app (window.__eaceV42, see the
+// export-service script block) rather than a separate, second
+// implementation, so an audience package is byte-for-byte the same
+// EACE Document Standard as every other export, just with a smaller item
+// set. format: 'zip' (default — one DOCX per matching pillar plus one per
+// output, folder-organised) | 'docx' | 'pdf' (single consolidated file).
+async function swExportAudiencePackage(audienceId, format, sysId){
+  const sys = resolveExportSystem(sysId) || (typeof sw!=='undefined' && sw.activeSystem);
+  if(!sys){ showToast('No active system.','var(--amber)'); return; }
+  if(!window.__eaceV42 || typeof window.__eaceV42.outputs!=='function'){
+    showToast('Export service unavailable.','var(--red-bright)'); return;
+  }
+  const audience = EXPORT_AUDIENCES.find(a=>a.id===audienceId);
+  const all = window.__eaceV42.outputs(sys,'complete');
+  const items = all.filter(audienceOutputFilter(audienceId));
+  if(!items.length){
+    showToast('No completed outputs match the '+(audience?audience.label:audienceId)+' yet — generate more documents first.','var(--amber)');
+    return;
+  }
+  format = format || 'zip';
+  const label = audience ? audience.label : audienceId;
+  const baseName = 'EACE-'+(sys.name||'system').replace(/[^a-z0-9]+/gi,'-').toLowerCase()+'-'+audienceId;
+  try{
+    if(format==='zip'){
+      await window.__eaceV42.exportZip(sys,'complete',items);
+    }else{
+      showToast('Preparing '+format.toUpperCase()+'…','var(--gold)');
+      const blob = await window.__eaceV42.buildCached(sys, items, label+' — '+(sys.name||'AI System'), format, 'complete');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = baseName+'.'+format; document.body.appendChild(a); a.click();
+      setTimeout(()=>{URL.revokeObjectURL(url); a.remove();}, 120000);
+      showToast(label+' downloaded ('+format.toUpperCase()+', '+items.length+' documents).','var(--green)');
+    }
+    addAuditRecord(sys,'export',label+' exported',audienceId,null,items.length+' outputs · '+format.toUpperCase(),'User-initiated audience export',null);
+  }catch(err){
+    console.error('[EACE audience export]',err);
+    showToast('Export failed: '+((err&&err.message)||err),'var(--red-bright)');
+  }
+}
 
 // ── MIGRATE EXISTING SYSTEM OBJECTS ──
 // Called when loading legacy systems from localStorage — ensures new fields exist
