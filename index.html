@@ -9228,7 +9228,7 @@ function addAuditRecord(sys, type, action, object, before, after, reason, eviden
 }
 
 // ── SW EXPORT (per-system) ──
-function renderSWExport(sys){
+function renderSWExportAudiencePackages(sys){
   return `<div class="sw-overview">
     <div class="ov-card" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
       <div>
@@ -52673,6 +52673,23 @@ document.addEventListener('click',function(e){const b=e.target.closest('[data-v4
 window.__eaceV47={currentSystem,outputs,makePdf,makeDocx,exportEvidence,exportAudit,run,async qa(){const s=currentSystem();if(!s)return {error:'no system'};const ps=Object.fromEntries(PROMPTS.map(p=>[p,outputs(s,p).length]));const items=outputs(s,'complete').slice(0,2);const pdf=items.length?await makePdf(s,items,'QA PDF'):null;const doc=items.length?await makeDocx(s,items,'QA DOCX'):null;return {system:s.name,prompts:ps,total:outputs(s,'complete').length,pdf:pdf&&{size:pdf.size,head:new TextDecoder().decode(await pdf.slice(0,5).arrayBuffer())},docx:doc&&{size:doc.size}}}};
 console.info('[EACE] v47 cross-browser export authority and case Audit/Evidence exports active.');
 })();
+// window.renderSWExport had been reassigned 7 times across this file (v17,
+// v25, v32, v43, v47 — each generation either wholesale replacing it or
+// wrapping the previous value), always with the same hardcoded 5-item
+// package list (regulatory/board/evidence/audit/vendor) underneath every
+// wrapper's patches. A bare top-level `function renderSWExport(sys){...}`
+// declaration and `window.renderSWExport` are the SAME binding in a
+// classic script, so simply doing `window.renderSWExport = renderSWExport`
+// here was a no-op: by this point in file order the bare identifier had
+// itself already been overwritten by the v47 wrapper above, so the RHS
+// just read back the shadowed value. Fix: the real 9-audience renderer is
+// declared under a distinct name, renderSWExportAudiencePackages, so it
+// can never be shadowed by later `window.renderSWExport = ...`
+// reassignments elsewhere in the file — only this explicit line below
+// controls what the Export Centre actually renders, and it is placed as
+// the very last statement in this inline script so nothing after it can
+// override it again.
+window.renderSWExport = window.renderSWExports = renderSWExportAudiencePackages;
 </script>
 
 <style id="eace-v49-overlay-ui">
