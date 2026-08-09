@@ -3346,14 +3346,29 @@ const FIELD_SCHEMA = {
 //   - engineVersion:           the P1-P4 orchestration/execution code (routing, model dispatch, evidence layer)
 //   - workspaceSchemaVersion:  the shape of persisted system/assessment/evidence data (localStorage)
 //   - exportPackageVersion:    the shape/structure of generated DOCX/PDF/ZIP/JSON export packages
+//   - buildId / buildDate:     this specific build, for support/diagnostic reference
 // Every place in the app that displays or stamps a version reads from here;
 // nothing should hardcode a version string again.
+//
+// This is deliberately NOT the same taxonomy as the internal "vNN" script-id
+// labels scattered through the rest of this file (eace-v17-runtime,
+// eace-v32-route-fixes, eace-v42-export-runtime, eace-v47-... and similar),
+// nor the file's opening historical comment ("EACE v37 complete sector
+// overlay taxonomy"), nor EACEExportService.version ('41.0'), nor the
+// __eaceV32/__eaceV42/__eaceV47 object names. Those are internal patch/
+// subsystem-generation labels — a development history, kept intentionally
+// as-is because they identify which historical layer a given block of code
+// belongs to (see the EACE Technical & Regulatory Architecture and EAI-006
+// Release Notes & Register for how that history maps to released versions).
+// BUILD_INFO is the current, authoritative, single runtime source of the
+// product's version identity — it does not replace or renumber that history.
 const BUILD_INFO = {
   productVersion:         '1.0.0',
   engineVersion:          '1.0.0',
   workspaceSchemaVersion: '1.0',
   exportPackageVersion:   '1.0',
   buildDate:              '2026-08-09',
+  buildId:                'EACE-1.0.0-20260809',
   label: function(){ return 'EACE COS v'+this.productVersion+' · Build '+this.buildDate; },
 };
 (function(){
@@ -8976,7 +8991,7 @@ function renderSWOverview(sys){
     </div>`;
 
   return `<div class="sw-overview">
-    ${sys.isSyntheticCase?'<div style="margin-bottom:16px;padding:10px 14px;background:var(--panel);border:0.5px solid var(--gold-2);border-radius:var(--radius-sm);font-family:var(--font-mono),monospace;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--gold-2);">Synthetic regulatory test case &mdash; no real organisation or natural person represented</div>':''}
+    ${sys.isSyntheticCase?'<div style="margin-bottom:16px;padding:10px 14px;background:var(--panel);border:0.5px solid var(--gold-2);border-radius:var(--radius-sm);font-family:var(--font-mono),monospace;font-size:10px;letter-spacing:0.06em;color:var(--gold-2);">SYNTHETIC REGULATORY TEST CASE<br/>NO REAL ORGANISATION OR NATURAL PERSON REPRESENTED</div>':''}
     <div class="ov-layout">
       <div class="ov-left">${summaryHtml}</div>
       <div class="ov-right">
@@ -9356,6 +9371,8 @@ function exportSystemJSON(sysId){
   if(!sys){ showToast('No active system.','var(--amber)'); return; }
   const payload = {
     app:'EACE', exportType:'system-regulatory-json', exportedAt:new Date().toISOString(),
+    buildInfo: { productVersion:BUILD_INFO.productVersion, engineVersion:BUILD_INFO.engineVersion, workspaceSchemaVersion:BUILD_INFO.workspaceSchemaVersion, exportPackageVersion:BUILD_INFO.exportPackageVersion, buildId:BUILD_INFO.buildId, buildDate:BUILD_INFO.buildDate },
+    syntheticCase: sys.isSyntheticCase===true,
     system:{ id:sys.id, name:sys.name, status:sys.status, risk:sys.risk, pillar:sys.pillar,
       version:(sys.data&&sys.data.sysVersion)||'v1.0', ran:sys.ran||{}, data:sys.data||{} },
     evidence: sys.evidence||[], auditRecords: sys.auditRecords||[], generatedOutputs: sys.generatedOutputs||[],
@@ -9436,6 +9453,10 @@ async function buildSingleOutputDocxBlob(sys, o){
     })]})],
   }));
   children.push(new Paragraph({text:'', spacing:{after:200}}));
+  if(sys.isSyntheticCase){
+    children.push(buildDocxPanel('SYNTHETIC REGULATORY TEST CASE', ['NO REAL ORGANISATION OR NATURAL PERSON REPRESENTED'], {fill:'FFF6E0', borderColor:'C6A667', labelColor:'8A6D1F', bodyFont}));
+    children.push(new Paragraph({text:'', spacing:{after:140}}));
+  }
   children.push(new Paragraph({ text:(o.code||'')+' — '+(o.title||''), heading:HeadingLevel.HEADING_1, spacing:{after:100} }));
   children.push(buildDocxPanel('LEGAL BASIS', [o.article||'Regulation (EU) 2024/1689, as amended by Regulation (EU) 2026/1744'], {bodyFont}));
   children.push(new Paragraph({text:'', spacing:{after:140}}));
@@ -9449,7 +9470,12 @@ async function buildSingleOutputDocxBlob(sys, o){
     children.push(buildDocxPanel('FINAL DETERMINATION', concText.slice(1,6), {fill:'E8F4F3', borderColor:'2FA7A3', bodyFont}));
   }
 
-  const doc = new Document({ sections:[{ properties:{}, children }] });
+  const doc = new Document({
+    creator: 'EACE.ai',
+    title: (o.code||'')+' — '+(o.title||'Regulatory Document'),
+    description: 'EACE.ai regulatory documentation · '+BUILD_INFO.label()+' · Export package v'+BUILD_INFO.exportPackageVersion,
+    sections: [{ properties:{}, children }],
+  });
   return Packer.toBlob(doc);
 }
 
@@ -9476,7 +9502,7 @@ async function exportRegulatoryZIP(sysId){
   zip.folder('evidence').file('evidence-register.csv', evLines.join('\n'));
 
   // /json — full structured export
-  zip.folder('json').file('system.json', JSON.stringify({system:{id:sys.id,name:sys.name,risk:sys.risk,pillar:sys.pillar,status:sys.status,data:sys.data||{}},evidence:sys.evidence||[],auditRecords:sys.auditRecords||[],generatedOutputs:sys.generatedOutputs||[]}, null, 2));
+  zip.folder('json').file('system.json', JSON.stringify({buildInfo:{productVersion:BUILD_INFO.productVersion,engineVersion:BUILD_INFO.engineVersion,workspaceSchemaVersion:BUILD_INFO.workspaceSchemaVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId},syntheticCase:sys.isSyntheticCase===true,system:{id:sys.id,name:sys.name,risk:sys.risk,pillar:sys.pillar,status:sys.status,data:sys.data||{}},evidence:sys.evidence||[],auditRecords:sys.auditRecords||[],generatedOutputs:sys.generatedOutputs||[]}, null, 2));
 
   // /csv — classification + outputs
   const csvFolder = zip.folder('csv');
@@ -9492,6 +9518,8 @@ async function exportRegulatoryZIP(sysId){
   // manifest.json — package-level metadata
   zip.file('manifest.json', JSON.stringify({
     package:'EACE Regulatory Package', system:sys.name, generatedAt:new Date().toISOString(),
+    buildInfo:{productVersion:BUILD_INFO.productVersion,engineVersion:BUILD_INFO.engineVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId},
+    syntheticCase:sys.isSyntheticCase===true,
     engine:sys.pillar, documentsCount:completeOutputs.length, evidenceCount:(sys.evidence||[]).length,
     contents:['docs/','evidence/evidence-register.csv','json/system.json','csv/classification.csv','csv/outputs.csv','hash/manifest.sha256'],
   }, null, 2));
@@ -9499,6 +9527,7 @@ async function exportRegulatoryZIP(sysId){
   // README
   zip.file('README.txt',
     'EACE.ai — Regulatory Package\n'+
+    (sys.isSyntheticCase ? 'SYNTHETIC REGULATORY TEST CASE — NO REAL ORGANISATION OR NATURAL PERSON REPRESENTED\n\n' : '')+
     'System: '+sys.name+'\n'+
     'Generated: '+new Date().toISOString()+'\n\n'+
     'Contents:\n'+
@@ -10120,6 +10149,8 @@ function exportSystemJSONLD(sysId){
     '@type':'AISystem', '@id':'urn:eace:system:'+sys.id,
     name: sys.name, riskClassification: sys.risk||'Unknown', applicableEngine: sys.pillar||'',
     version:(sys.data&&sys.data.sysVersion)||'v1.0', dateCreated:new Date().toISOString(),
+    eaceBuildInfo: { productVersion:BUILD_INFO.productVersion, engineVersion:BUILD_INFO.engineVersion, exportPackageVersion:BUILD_INFO.exportPackageVersion, buildId:BUILD_INFO.buildId },
+    syntheticCase: sys.isSyntheticCase===true,
     sector:(sys.data&&sys.data.sector)||[], deploymentCountries:(sys.data&&sys.data.deploymentCountries)||[],
     evidence:(sys.evidence||[]).map(e=>({'@type':'EvidenceRecord','@id':'urn:eace:evidence:'+e.id, title:e.title||e.type, category:mapEvidenceCategory(e.type), article:e.article, hash:e.hash, dateCreated:e.ts})),
     generatedDocuments:(sys.generatedOutputs||[]).map(o=>({'@type':'RegulatoryDocument','@id':'urn:eace:output:'+o.code, name:o.title, legalBasis:o.article, category:o.cat})),
@@ -10151,7 +10182,7 @@ async function exportEvidenceBundle(sysId){
   zip.file('Evidence-Map.txt', mapLines.join('\n'));
 
   zip.file('SHA256.txt', evidence.map(e=>(e.hash||'—')+'  '+(e.id||'')).join('\n'));
-  zip.file('Manifest.json', JSON.stringify({package:'EACE Evidence Bundle', system:sys.name, generatedAt:new Date().toISOString(), evidenceCount:evidence.length, categories:Object.keys(byCat)}, null, 2));
+  zip.file('Manifest.json', JSON.stringify({package:'EACE Evidence Bundle', buildInfo:{productVersion:BUILD_INFO.productVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId}, syntheticCase:sys.isSyntheticCase===true, system:sys.name, generatedAt:new Date().toISOString(), evidenceCount:evidence.length, categories:Object.keys(byCat)}, null, 2));
 
   const blob = await zip.generateAsync({type:'blob'});
   const url = URL.createObjectURL(blob);
@@ -10168,7 +10199,7 @@ async function exportAuditPackage(sysId){
   const zip = new JSZip();
   const records = sys.auditRecords||[];
 
-  zip.file('Audit.json', JSON.stringify({system:sys.name, exportedAt:new Date().toISOString(), records}, null, 2));
+  zip.file('Audit.json', JSON.stringify({system:sys.name, buildInfo:{productVersion:BUILD_INFO.productVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId}, syntheticCase:sys.isSyntheticCase===true, exportedAt:new Date().toISOString(), records}, null, 2));
 
   const { jsPDF } = jspdf;
   const doc = new jsPDF({unit:'pt', format:'a4'});
@@ -10184,7 +10215,7 @@ async function exportAuditPackage(sysId){
   zip.file('Audit.pdf', pdfBlob);
 
   zip.file('Hashes.txt', (sys.evidence||[]).map(e=>(e.hash||'—')+'  '+(e.id||'')).join('\n'));
-  zip.file('Manifest.json', JSON.stringify({package:'EACE Immutable Audit Package', system:sys.name, generatedAt:new Date().toISOString(), recordCount:records.length}, null, 2));
+  zip.file('Manifest.json', JSON.stringify({package:'EACE Immutable Audit Package', buildInfo:{productVersion:BUILD_INFO.productVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId}, syntheticCase:sys.isSyntheticCase===true, system:sys.name, generatedAt:new Date().toISOString(), recordCount:records.length}, null, 2));
 
   const blob = await zip.generateAsync({type:'blob'});
   const url = URL.createObjectURL(blob);
@@ -15958,7 +15989,7 @@ function updateProfileRing(sysId){
       +'<input type="checkbox" '+(sys.isSyntheticCase?'checked':'')+' onchange="swToggleSyntheticCase(\''+safeEsc(sys.id)+'\',this.checked)"/>'
       +'Synthetic / demonstration case <span style="color:var(--faint);">&mdash; no real organisation or natural person represented</span></label></div>';
 
-    var syntheticBanner = sys.isSyntheticCase?'<div style="margin-bottom:16px;padding:10px 14px;background:var(--panel);border:0.5px solid var(--gold-2);border-radius:var(--radius-sm);font-family:var(--font-mono),monospace;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--gold-2);">Synthetic regulatory test case &mdash; no real organisation or natural person represented</div>':'';
+    var syntheticBanner = sys.isSyntheticCase?'<div style="margin-bottom:16px;padding:10px 14px;background:var(--panel);border:0.5px solid var(--gold-2);border-radius:var(--radius-sm);font-family:var(--font-mono),monospace;font-size:10px;letter-spacing:0.06em;color:var(--gold-2);">SYNTHETIC REGULATORY TEST CASE<br/>NO REAL ORGANISATION OR NATURAL PERSON REPRESENTED</div>':'';
 
     return '<div class="sw-overview">'+syntheticBanner+'<div class="ov-layout"><div class="ov-left">'+summaryHtml+healthHtml+'</div><div class="ov-right">'
       +nextActionHtml+obligationsHtml+overlayHtml+evidenceHtml+assessmentsHtml+activityHtml+quickActionsHtml
@@ -51766,6 +51797,7 @@ async function buildDocx(system,items,title){
  }
  const prompts=PROMPTS.filter(p=>items.some(o=>promptOf(o)===p)),tag=prompts.join('-')||'Complete',children=[];
  children.push(new D.Table({width:{size:100,type:D.WidthType.PERCENTAGE},borders:{top:{style:D.BorderStyle.NONE},bottom:{style:D.BorderStyle.NONE},left:{style:D.BorderStyle.NONE},right:{style:D.BorderStyle.NONE},insideHorizontal:{style:D.BorderStyle.NONE},insideVertical:{style:D.BorderStyle.NONE}},rows:[new D.TableRow({children:[new D.TableCell({shading:{type:D.ShadingType.CLEAR,fill:teal},margins:{top:900,bottom:900,left:420,right:420},children:[para(inlineRuns(D,'EACE.ai',{font:'Georgia',size:52,color:gold,bold:true}),{alignment:D.AlignmentType.CENTER,spacing:{after:240}}),para(inlineRuns(D,title||t('Complete Regulatory Documentation'),{font:'Georgia',size:34,color:white,bold:true}),{alignment:D.AlignmentType.CENTER,spacing:{after:200}}),para(inlineRuns(D,system.name||t('AI System'),{font:'Georgia',size:25,color:white}),{alignment:D.AlignmentType.CENTER,spacing:{after:260}}),para(inlineRuns(D,'PROMPTS '+tag+' | '+items.length+' REGULATORY ARTEFACTS',{size:17,color:gold,bold:true}),{alignment:D.AlignmentType.CENTER,spacing:{after:360}}),para(inlineRuns(D,t('CONFIDENTIAL - Human review required before regulatory use'),{size:15,color:white}),{alignment:D.AlignmentType.CENTER,spacing:{after:0}}),(()=>{const cst=placeholderStatsDocx(null),ctot=cst.A+cst.B+cst.C;return ctot?para(inlineRuns(D,cst.A+(docLang==='Croatian'?' od '+ctot+' preostalih polja zahtijeva izravan korisnički unos prije predaje':' of '+ctot+' outstanding fields require direct user input before submission'),{size:13,color:white}),{alignment:D.AlignmentType.CENTER,spacing:{before:160,after:0}}):para('',{spacing:{after:0}})})()]})]})]}),para([new D.PageBreak()]));
+ if(system&&system.isSyntheticCase){children.push(new D.Table({width:{size:100,type:D.WidthType.PERCENTAGE},borders:{top:{style:D.BorderStyle.SINGLE,size:4,color:gold},bottom:{style:D.BorderStyle.SINGLE,size:4,color:gold},left:{style:D.BorderStyle.SINGLE,size:4,color:gold},right:{style:D.BorderStyle.SINGLE,size:4,color:gold},insideHorizontal:{style:D.BorderStyle.NONE},insideVertical:{style:D.BorderStyle.NONE}},rows:[new D.TableRow({children:[new D.TableCell({shading:{type:D.ShadingType.CLEAR,fill:'FFF6E0'},margins:{top:140,bottom:140,left:180,right:180},children:[para(inlineRuns(D,'SYNTHETIC REGULATORY TEST CASE',{bold:true,size:20,color:'8A6D1F'}),{alignment:D.AlignmentType.CENTER,spacing:{after:60}}),para(inlineRuns(D,'NO REAL ORGANISATION OR NATURAL PERSON REPRESENTED',{size:18,color:'8A6D1F'}),{alignment:D.AlignmentType.CENTER,spacing:{after:0}})]})]})]}),para('',{spacing:{after:200}}))}
  children.push(para(inlineRuns(D,t('Document Overview'),{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));children.push(table([[t('Document'),t('System'),t('Included prompts'),t('Artefacts')],[title||t('Complete Regulatory Documentation'),system.name||t('AI System'),tag,String(items.length)]]),para([new D.PageBreak()]));
  // Pillar Completion Overview -- upfront, at-a-glance dashboard for every pillar in this
  // export, right after Document Overview, not buried deep inside whichever page the
@@ -51784,15 +51816,16 @@ async function buildDocx(system,items,title){
  children.push(para(inlineRuns(D,t('Contents'),{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));for(const p of prompts)children.push(para(inlineRuns(D,p+' - '+LABEL[p],{bold:true,color:'1A5A73'}),{alignment:D.AlignmentType.LEFT}));children.push(para([new D.PageBreak()]));
  let cur='';for(const o of items){const p=promptOf(o);if(p!==cur){if(cur)children.push(para([new D.PageBreak()]));cur=p;children.push(para(inlineRuns(D,p+' - '+LABEL[p],{font:'Georgia',size:32,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_1,alignment:D.AlignmentType.LEFT,keepNext:true}));}
   children.push(para(inlineRuns(D,String(o.code||o.outputId||o.outputNumber||'Document')+' - '+String(o.title||t('Untitled artefact')),{font:'Georgia',size:27,color:teal,bold:true}),{heading:D.HeadingLevel.HEADING_2,alignment:D.AlignmentType.LEFT,spacing:{before:220,after:80},keepNext:true}));if(o.article)children.push(table([[t('LEGAL BASIS'),o.article]]));if(p&&SUMMARY_CODES_DOCX[p]===o.code)children.push(...summaryDashboard(p));children.push(...(p==='P1'?blockNodesP1Styled(parseMd(o.content||'')):blockNodes(parseMd(o.content||''))))}
- const doc=new D.Document({creator:'EACE.ai',title:title||'Complete Regulatory Documentation',description:'EACE.ai regulatory documentation',styles:{default:{document:{run:{font:'Arial',size:20,color:ink},paragraph:{spacing:{line:240,after:90}}}}},sections:[{properties:{page:{margin:{top:850,right:850,bottom:850,left:850}}},children}]});return await D.Packer.toBlob(doc);
+ const doc=new D.Document({creator:'EACE.ai',title:title||'Complete Regulatory Documentation',description:'EACE.ai regulatory documentation · '+BUILD_INFO.label()+' · Export package v'+BUILD_INFO.exportPackageVersion+(system&&system.isSyntheticCase?' · SYNTHETIC TEST CASE':''),styles:{default:{document:{run:{font:'Arial',size:20,color:ink},paragraph:{spacing:{line:240,after:90}}}}},sections:[{properties:{page:{margin:{top:850,right:850,bottom:850,left:850}}},children}]});return await D.Packer.toBlob(doc);
 }
 async function buildPdf(system,items,title){
  const C=window.jspdf?.jsPDF||window.jsPDF;if(!C)throw new Error('PDF library is unavailable.');const d=new C({unit:'pt',format:'a4',compress:true}),W=d.internal.pageSize.getWidth(),H=d.internal.pageSize.getHeight(),m=44,contentW=W-2*m,bottom=48;let y=56;
+ try{d.setProperties({title:title||'Complete Regulatory Documentation',subject:'EACE.ai regulatory documentation · '+BUILD_INFO.label()+' · Export package v'+BUILD_INFO.exportPackageVersion,creator:'EACE.ai',keywords:BUILD_INFO.buildId+(system&&system.isSyntheticCase?' synthetic-test-case':'')});}catch(e){}
  function newPage(){d.addPage();y=56}
  function ensure(h){if(y+h>H-bottom)newPage()}
  function drawText(text,size=9.5,bold=false,color=[30,30,30],gap=5,indent=0){d.setFont('helvetica',bold?'bold':'normal');d.setFontSize(size);const lines=d.splitTextToSize(cleanInline(text),contentW-indent);const lh=size*1.28;ensure(lines.length*lh+gap);d.setTextColor(...color);d.text(lines,m+indent,y,{baseline:'top'});y+=lines.length*lh+gap}
  function drawTable(rows){if(!rows.length)return;const cols=Math.max(...rows.map(r=>r.length)),cw=contentW/cols;for(let ri=0;ri<rows.length;ri++){const isHead=ri===0;d.setFont('helvetica',isHead?'bold':'normal');d.setFontSize(7.3);const wrapped=Array.from({length:cols},(_,i)=>d.splitTextToSize(cleanInline(rows[ri][i]||''),cw-10));const lineH=9.2,rh=Math.max(24,Math.max(...wrapped.map(a=>a.length))*lineH+10);ensure(rh);for(let i=0;i<cols;i++){d.setFillColor(...(isHead?[18,62,59]:[255,255,255]));d.setDrawColor(185,185,180);d.rect(m+i*cw,y,cw,rh,'FD');d.setTextColor(...(isHead?[255,255,255]:[25,25,25]));d.text(wrapped[i],m+i*cw+5,y+6,{baseline:'top'})}y+=rh}y+=8}
- d.setFillColor(18,62,59);d.rect(0,0,W,H,'F');d.setTextColor(198,166,103);d.setFont('times','bold');d.setFontSize(34);d.text('EACE.ai',W/2,175,{align:'center'});d.setTextColor(255);d.setFontSize(23);d.text(title||'Complete Regulatory Documentation',W/2,230,{align:'center'});d.setFontSize(15);d.text(system.name||'AI System',W/2,270,{align:'center'});newPage();let cur='';
+ d.setFillColor(18,62,59);d.rect(0,0,W,H,'F');d.setTextColor(198,166,103);d.setFont('times','bold');d.setFontSize(34);d.text('EACE.ai',W/2,175,{align:'center'});d.setTextColor(255);d.setFontSize(23);d.text(title||'Complete Regulatory Documentation',W/2,230,{align:'center'});d.setFontSize(15);d.text(system.name||'AI System',W/2,270,{align:'center'});if(system&&system.isSyntheticCase){d.setDrawColor(198,166,103);d.setLineWidth(1);d.rect(m,300,W-2*m,44);d.setTextColor(198,166,103);d.setFont('helvetica','bold');d.setFontSize(11);d.text('SYNTHETIC REGULATORY TEST CASE',W/2,318,{align:'center'});d.setFont('helvetica','normal');d.setFontSize(9);d.text('NO REAL ORGANISATION OR NATURAL PERSON REPRESENTED',W/2,334,{align:'center'})}newPage();let cur='';
  for(const o of items){const p=promptOf(o);if(p!==cur){cur=p;drawText(p+' - '+LABEL[p],18,true,[18,62,59],12)}drawText(String(o.code||o.outputId||'Document')+' - '+String(o.title||''),13.5,true,[18,62,59],7);if(o.article)drawTable([['LEGAL BASIS',o.article]]);for(const b of parseMd(o.content||'')){if(b.type==='table')drawTable(b.rows);else if(b.type==='heading')drawText(b.text,Math.max(11,15-b.level),true,[18,62,59],6);else if(b.type==='quote')drawText(b.text,9.2,false,[55,55,55],7,10);else if(b.type==='bullet')drawText('• '+b.text,9.5,false,[30,30,30],4,8);else if(b.type==='number')drawText(b.num+'. '+b.text,9.5,false,[30,30,30],4,8);else drawText(b.text,9.5,false,[30,30,30],5)} }
  return d.output('blob');
 }
@@ -52016,7 +52049,7 @@ function canonicalOutputs(sys,scope){
 function outputsByPrompt(sys){const g={};PROMPT_ORDER.forEach(p=>g[p]=[]);canonicalOutputs(sys).forEach(o=>{const p=inferPrompt(o);(g[p]||(g[p]=[])).push(o)});return g}
 function jsonPayload(sys,scope){
   const all=canonicalOutputs(sys,scope),grouped={};PROMPT_ORDER.forEach(p=>grouped[p]=[]);all.forEach(o=>(grouped[inferPrompt(o)]||(grouped[inferPrompt(o)]=[])).push(o));
-  return {app:'EACE',schemaVersion:4,exportType:scope&&PROMPT_ORDER.includes(scope)?'prompt-regulatory-json':'system-regulatory-json',scope:scope||'complete',exportedAt:new Date().toISOString(),system:{id:sys.id,name:sys.name,status:sys.status,risk:sys.risk,pillar:sys.pillar,version:(sys.data&&sys.data.sysVersion)||'v1.0',ran:sys.ran||{},data:sys.data||{},profile:sys.profile||{}},completedPrompts:PROMPT_ORDER.filter(p=>grouped[p]&&grouped[p].length),outputCounts:Object.fromEntries(PROMPT_ORDER.map(p=>[p,(grouped[p]||[]).length])),outputsByPrompt:grouped,generatedOutputs:all,masterRegulatoryPackages:sys.masterRegulatoryPackages||{},finalRegulatoryReviews:sys.finalRegulatoryReviews||{},evidence:sys.evidence||[],auditRecords:sys.auditRecords||[],assessments:sys.assessments||[],attachments:sys.attachments||[],exports:sys.exports||[]};
+  return {app:'EACE',schemaVersion:4,exportType:scope&&PROMPT_ORDER.includes(scope)?'prompt-regulatory-json':'system-regulatory-json',scope:scope||'complete',exportedAt:new Date().toISOString(),buildInfo:(typeof BUILD_INFO!=='undefined'?{productVersion:BUILD_INFO.productVersion,engineVersion:BUILD_INFO.engineVersion,workspaceSchemaVersion:BUILD_INFO.workspaceSchemaVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId}:null),syntheticCase:sys.isSyntheticCase===true,system:{id:sys.id,name:sys.name,status:sys.status,risk:sys.risk,pillar:sys.pillar,version:(sys.data&&sys.data.sysVersion)||'v1.0',ran:sys.ran||{},data:sys.data||{},profile:sys.profile||{}},completedPrompts:PROMPT_ORDER.filter(p=>grouped[p]&&grouped[p].length),outputCounts:Object.fromEntries(PROMPT_ORDER.map(p=>[p,(grouped[p]||[]).length])),outputsByPrompt:grouped,generatedOutputs:all,masterRegulatoryPackages:sys.masterRegulatoryPackages||{},finalRegulatoryReviews:sys.finalRegulatoryReviews||{},evidence:sys.evidence||[],auditRecords:sys.auditRecords||[],assessments:sys.assessments||[],attachments:sys.attachments||[],exports:sys.exports||[]};
 }
 function saveBlob(blob,name){const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),5000)}
 function saveText(text,mime,name){if(typeof downloadBlob==='function')return downloadBlob(text,mime,name);saveBlob(new Blob([text],{type:mime}),name)}
@@ -52041,7 +52074,7 @@ async function centralZip(sys,scope){
   zip.folder('json').file('system.json',jsonText);
   const csv=['prompt,code,title,state,generated_at'].concat(outputs.map(o=>[inferPrompt(o),o.code||'',String(o.title||'').replace(/"/g,'""'),o.state||'complete',o.ts||''].map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','))).join('\n');
   zip.folder('csv').file('outputs.csv',csv);
-  zip.file('manifest.json',JSON.stringify({package:'EACE Central Regulatory Package',schemaVersion:4,systemId:sys.id,systemName:sys.name,scope:scopeName,generatedAt:new Date().toISOString(),completedPrompts:data.completedPrompts,outputCounts:data.outputCounts,contents:['docs/','EACE-'+scopeName+'-complete.json','json/system.json','csv/outputs.csv','manifest.json']},null,2));
+  zip.file('manifest.json',JSON.stringify({package:'EACE Central Regulatory Package',schemaVersion:4,buildInfo:(typeof BUILD_INFO!=='undefined'?{productVersion:BUILD_INFO.productVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId}:null),syntheticCase:sys.isSyntheticCase===true,systemId:sys.id,systemName:sys.name,scope:scopeName,generatedAt:new Date().toISOString(),completedPrompts:data.completedPrompts,outputCounts:data.outputCounts,contents:['docs/','EACE-'+scopeName+'-complete.json','json/system.json','csv/outputs.csv','manifest.json']},null,2));
   const blob=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});saveBlob(blob,'eace-'+slug(sys.name)+'-'+scopeName+'-regulatory-package.zip');
   try{if(typeof addAuditRecord==='function'){addAuditRecord(sys,'export','Central ZIP exported',scopeName,null,data.completedPrompts.join(', '),'User-initiated export',null);if(typeof saveSystems==='function')saveSystems()}}catch(e){}
   toast('ZIP downloaded — DOCX, JSON, CSV and manifest included.','var(--green)');
@@ -52066,7 +52099,7 @@ async function exportSystem(sysId,format,scope){const sys=systemById(sysId);if(!
   throw new Error('Unsupported system export format: '+format)
 })}
 
-const service={version:'39.0',systemById,canonicalOutputs,outputsByPrompt,jsonPayload,exportPrompt,exportSystem,centralZip};
+const service={version:'39.0',buildInfo:(typeof BUILD_INFO!=='undefined'?BUILD_INFO:null),systemById,canonicalOutputs,outputsByPrompt,jsonPayload,exportPrompt,exportSystem,centralZip};
 window.EACEExportService=service;
 window.rcExportPrompt=(id,p,f)=>service.exportPrompt(id,p,String(f||'docx').toLowerCase());
 window.rcExportSystem=(id,f)=>service.exportSystem(id,String(f||'docx').toLowerCase());
@@ -52296,7 +52329,7 @@ function outputs(s,scope){
 }
 function signature(s,items,scope,fmt){let n=0;for(const o of items)n+=String(o.content||'').length;return [s.id,scope,fmt,items.length,n,items.map(o=>String(o.code||o.outputId||'')).join(',')].join('|')}
 function trigger(blob,name){if(!(blob instanceof Blob)||blob.size<64)throw new Error('Generated file is empty or invalid.');const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(u);a.remove()},120000);return {name,size:blob.size,type:blob.type}}
-function fullJson(s,items){return {schema:'EACE_CASE_EXPORT_V42',exportedAt:new Date().toISOString(),system:s,generatedOutputs:items,attachments:s.attachments||[],promptAttachments:s.promptAttachments||{},auditTrail:s.auditTrail||s.audit||[],evidence:s.evidence||s.evidenceItems||[]}}
+function fullJson(s,items){return {schema:'EACE_CASE_EXPORT_V42',exportedAt:new Date().toISOString(),buildInfo:{productVersion:BUILD_INFO.productVersion,engineVersion:BUILD_INFO.engineVersion,workspaceSchemaVersion:BUILD_INFO.workspaceSchemaVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId},syntheticCase:s.isSyntheticCase===true,system:s,generatedOutputs:items,attachments:s.attachments||[],promptAttachments:s.promptAttachments||{},auditTrail:s.auditTrail||s.audit||[],evidence:s.evidence||s.evidenceItems||[]}}
 async function buildCached(s,items,title,format,scope){
  const key=signature(s,items,scope,format);if(cache.has(key))return cache.get(key);
  await new Promise(r=>setTimeout(r,20));
@@ -52349,7 +52382,7 @@ async function exportZip(s,scope,items){
   }
  }
  z.file('EACE-'+slug(s.name)+'-complete-case.json',JSON.stringify(fullJson(s,items),null,2));
- z.file('manifest.json',JSON.stringify({schema:'EACE_REGULATORY_PACKAGE_V42',systemId:s.id,systemName:s.name,prompts:ps,outputCount:items.length,generatedAt:new Date().toISOString(),contents:['complete DOCX','one DOCX per prompt','complete JSON','attachments metadata','audit/evidence in JSON']},null,2));
+ z.file('manifest.json',JSON.stringify({schema:'EACE_REGULATORY_PACKAGE_V42',buildInfo:{productVersion:BUILD_INFO.productVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId},syntheticCase:s.isSyntheticCase===true,systemId:s.id,systemName:s.name,prompts:ps,outputCount:items.length,generatedAt:new Date().toISOString(),contents:['complete DOCX','one DOCX per prompt','complete JSON','attachments metadata','audit/evidence in JSON']},null,2));
  // Attachments live under Documents/{pillar}/Attachments -- alongside that
  // pillar's own DOCX and outputs folder, in the same tree a reader is
  // already browsing, rather than in a separately-numbered top-level folder
@@ -52483,7 +52516,7 @@ function workspacePayload(){
  const active=systemById();
  let organisation=null,activeSystemId=active&&active.id||null,role=null,documentationLanguage=null;
  try{organisation=(typeof st!=='undefined'&&st&&st.organisation)||(typeof WORKSPACE!=='undefined'&&WORKSPACE&&(WORKSPACE.orgProfile||WORKSPACE.organisation))||window.organisation||null;role=typeof st!=='undefined'&&st&&st.role||null;documentationLanguage=typeof st!=='undefined'&&st&&st.documentationLanguage||null}catch(e){}
- return {schema:'EACE_COMPLETE_WORKSPACE_EXPORT_V45',schemaVersion:45,exportedAt:new Date().toISOString(),application:{name:'EACE.ai Local-First Platform',version:'v45'},organisation,activeSystemId,systems,globalAudit:Array.isArray(window.auditLog)?window.auditLog:[],settings:{role,documentationLanguage}};
+ return {schema:'EACE_COMPLETE_WORKSPACE_EXPORT_V45',schemaVersion:45,exportedAt:new Date().toISOString(),application:{name:'EACE.ai Local-First Platform',version:'v45'},buildInfo:(typeof BUILD_INFO!=='undefined'?{productVersion:BUILD_INFO.productVersion,engineVersion:BUILD_INFO.engineVersion,workspaceSchemaVersion:BUILD_INFO.workspaceSchemaVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId}:null),organisation,activeSystemId,systems,globalAudit:Array.isArray(window.auditLog)?window.auditLog:[],settings:{role,documentationLanguage}};
 }
 console.info('[EACE v45] Canonical active-system export context enabled.');
 function exportHeaderJson(){
@@ -52527,7 +52560,7 @@ async function exportCentral(s,format,scope,styleId){
    if(window.__eaceV42&&typeof __eaceV42.exportZip==='function')return __eaceV42.exportZip(s,scope,items);
    throw new Error('ZIP exporter is unavailable.');
   }
-  if(format==='json'){const b=new Blob([JSON.stringify({schema:'EACE_CASE_EXPORT_V44',exportedAt:new Date().toISOString(),system:s,generatedOutputs:items},null,2)],{type:'application/json'});return download(b,'EACE-'+slug(s.name)+'-complete-case.json')}
+  if(format==='json'){const b=new Blob([JSON.stringify({schema:'EACE_CASE_EXPORT_V44',exportedAt:new Date().toISOString(),buildInfo:(typeof BUILD_INFO!=='undefined'?{productVersion:BUILD_INFO.productVersion,engineVersion:BUILD_INFO.engineVersion,workspaceSchemaVersion:BUILD_INFO.workspaceSchemaVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId}:null),syntheticCase:s.isSyntheticCase===true,system:s,generatedOutputs:items},null,2)],{type:'application/json'});return download(b,'EACE-'+slug(s.name)+'-complete-case.json')}
   throw new Error('Unsupported export format: '+format);
  })().catch(e=>{console.error('[EACE v44 export]',e);toast('Export failed: '+(e.message||e),'var(--red-bright)');throw e}).finally(()=>activeJobs.delete(key));activeJobs.set(key,job);return job;
 }
@@ -52683,7 +52716,7 @@ async function makeDocx(s,items,title){if(!(window.__eaceV32&&typeof __eaceV32.b
 function evidenceRows(s){const r=[];(s.evidence||[]).forEach(x=>r.push({type:'evidence',prompt:x.promptId||x.prompt||'',record:x}));(s.attachments||[]).forEach(x=>r.push({type:'attachment',prompt:x.promptId||x.prompt||'',record:x}));for(const p of PROMPTS)(s.promptAttachments&&s.promptAttachments[p]||[]).forEach(x=>r.push({type:'promptAttachment',prompt:p,record:x}));return r}
 function auditRows(s){return [...(s.auditRecords||[]),...(s.auditTrail||[]),...(s.decisionTraces||[])].filter(Boolean)}
 function csv(rows){const q=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"';return rows.map(r=>r.map(q).join(',')).join('\r\n')}
-async function exportEvidence(s,format){const r=evidenceRows(s);if(!r.length)throw new Error('No evidence or attachments are available for this AI system.');const base='eace-'+slug(s.name)+'-evidence';if(format==='json')return safeDownload(new Blob([JSON.stringify({schema:'EACE_CASE_EVIDENCE_V47',exportedAt:new Date().toISOString(),systemId:s.id,systemName:s.name,records:r},null,2)],{type:'application/json'}),base+'.json');if(format==='csv'){const rr=[['Type','Prompt','Name','Status','Date','SHA-256']];r.forEach(x=>rr.push([x.type,x.prompt,x.record.name||x.record.title||x.record.id||'',x.record.status||x.record.parseStatus||'',x.record.addedAt||x.record.ts||'',x.record.sha256||x.record.hash||'']));return safeDownload(new Blob([csv(rr)],{type:'text/csv;charset=utf-8'}),base+'.csv')}const z=new JSZip();z.file('evidence-register.json',JSON.stringify(r,null,2));for(const x of r){const a=x.record||{},name=slug(x.prompt||'general')+'/'+String(a.name||a.filename||a.title||a.id||'record.json').replace(/[\\/:*?"<>|]+/g,'-');if(a.base64){try{z.file('attachments/'+name,a.base64,{base64:true})}catch(e){z.file('metadata/'+name+'.json',JSON.stringify(a,null,2))}}else if(a.data&&typeof a.data==='string'){z.file('attachments/'+name,a.data)}else z.file('metadata/'+name+'.json',JSON.stringify(a,null,2))}return safeDownload(await z.generateAsync({type:'blob',compression:'STORE'}),base+'.zip')}
+async function exportEvidence(s,format){const r=evidenceRows(s);if(!r.length)throw new Error('No evidence or attachments are available for this AI system.');const base='eace-'+slug(s.name)+'-evidence';if(format==='json')return safeDownload(new Blob([JSON.stringify({schema:'EACE_CASE_EVIDENCE_V47',exportedAt:new Date().toISOString(),buildInfo:{productVersion:BUILD_INFO.productVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId},syntheticCase:s.isSyntheticCase===true,systemId:s.id,systemName:s.name,records:r},null,2)],{type:'application/json'}),base+'.json');if(format==='csv'){const rr=[['Type','Prompt','Name','Status','Date','SHA-256']];r.forEach(x=>rr.push([x.type,x.prompt,x.record.name||x.record.title||x.record.id||'',x.record.status||x.record.parseStatus||'',x.record.addedAt||x.record.ts||'',x.record.sha256||x.record.hash||'']));return safeDownload(new Blob([csv(rr)],{type:'text/csv;charset=utf-8'}),base+'.csv')}const z=new JSZip();z.file('evidence-register.json',JSON.stringify(r,null,2));for(const x of r){const a=x.record||{},name=slug(x.prompt||'general')+'/'+String(a.name||a.filename||a.title||a.id||'record.json').replace(/[\\/:*?"<>|]+/g,'-');if(a.base64){try{z.file('attachments/'+name,a.base64,{base64:true})}catch(e){z.file('metadata/'+name+'.json',JSON.stringify(a,null,2))}}else if(a.data&&typeof a.data==='string'){z.file('attachments/'+name,a.data)}else z.file('metadata/'+name+'.json',JSON.stringify(a,null,2))}return safeDownload(await z.generateAsync({type:'blob',compression:'STORE'}),base+'.zip')}
 async function exportAudit(s,format){
   const r=auditRows(s);
   if(!r.length)throw new Error('No audit records are available for this AI system.');
@@ -52693,6 +52726,8 @@ async function exportAudit(s,format){
   const payload={
     schema:'EACE_AI_SYSTEM_AUDIT_TRAIL_V48',
     documentType:'AI System Audit Trail',
+    buildInfo:{productVersion:BUILD_INFO.productVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId},
+    syntheticCase:s.isSyntheticCase===true,
     systemId:s.id,
     systemName:s.name,
     exportedAt:new Date().toISOString(),
