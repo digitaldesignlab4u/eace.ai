@@ -2409,7 +2409,7 @@ console.info('[EACE] v63 authoritative PDF export router active (first-registere
         <a href="#" onclick="return false;" style="color:var(--gold-2);text-decoration:none;">Documentation</a>
         &middot; <a href="#" onclick="return false;" style="color:var(--muted);text-decoration:none;">Privacy</a>
         &middot; <a href="#" onclick="return false;" style="color:var(--muted);text-decoration:none;">Licence</a>
-        &middot; Version 6.5 &middot; Build 2026.07
+        &middot; <span id="build-info-login-footer">Version 6.5 &middot; Build 2026.07</span>
       </div>
       <div class="copy">From Crisis to Authority<sup>™</sup> &nbsp;·&nbsp; &copy; 2026 digitaldesignlab4u · All rights reserved.</div>
     </div>
@@ -2521,7 +2521,7 @@ console.info('[EACE] v63 authoritative PDF export router active (first-registere
     </div>
 
   </div><!-- /app-body -->
-  <div class="app-footer">From Crisis to Authority<sup>™</sup> &nbsp;·&nbsp; © 2026 digitaldesignlab4u · All rights reserved.</div>
+  <div class="app-footer">From Crisis to Authority<sup>™</sup> &nbsp;·&nbsp; © 2026 digitaldesignlab4u · All rights reserved. &nbsp;·&nbsp; <span id="build-info-app-footer"></span></div>
 
   <!-- ═══ MODALS ═══ -->
 
@@ -3331,6 +3331,37 @@ const FIELD_SCHEMA = {
     example:'Internal regulatory desk signs off all non-English texts', source:'sys'},
 
 };
+
+// ── BUILD_INFO — single source of truth for product/build identity ──
+// Before this, the same product carried three unrelated version strings
+// depending on where you looked: the login screen footer said "Version 6.5
+// / Build 2026.07", the export-object factory hardcoded "EACE COS v1.0" in
+// two separate places, and the file header comment still read "EACE v37" —
+// none of which agreed with each other or with anything else. None of those
+// numbers tracked the same thing, so none of them can just be kept as "the"
+// version. BUILD_INFO replaces all of them with four distinct, named
+// identifiers, each versioned independently because each changes for a
+// different reason:
+//   - productVersion:          what EACE is called/sold as externally (UI, DD docs, exports)
+//   - engineVersion:           the P1-P4 orchestration/execution code (routing, model dispatch, evidence layer)
+//   - workspaceSchemaVersion:  the shape of persisted system/assessment/evidence data (localStorage)
+//   - exportPackageVersion:    the shape/structure of generated DOCX/PDF/ZIP/JSON export packages
+// Every place in the app that displays or stamps a version reads from here;
+// nothing should hardcode a version string again.
+const BUILD_INFO = {
+  productVersion:         '1.0.0',
+  engineVersion:          '1.0.0',
+  workspaceSchemaVersion: '1.0',
+  exportPackageVersion:   '1.0',
+  buildDate:              '2026-08-09',
+  label: function(){ return 'EACE COS v'+this.productVersion+' · Build '+this.buildDate; },
+};
+(function(){
+  const loginEl = document.getElementById('build-info-login-footer');
+  if(loginEl) loginEl.textContent = 'Version '+BUILD_INFO.productVersion+' · Build '+BUILD_INFO.buildDate;
+  const appEl = document.getElementById('build-info-app-footer');
+  if(appEl) appEl.textContent = BUILD_INFO.label();
+})();
 
 const exec = {
   pillar:       null,
@@ -8681,6 +8712,21 @@ function newSystemFromPortfolio(){
   showToast('System created. Complete the Master Profile to start assessment.','var(--gold)');
 }
 
+// Marks/unmarks a system as a synthetic demonstration case (fabricated org
+// and personal data, used for validation/DD purposes) — surfaced on the
+// Overview banner, in the Export Centre context panel, and stamped onto
+// every export this system produces, so nobody has to infer from the data
+// itself whether a package represents a real customer.
+function swToggleSyntheticCase(sysId, checked){
+  const sys = (st.systems||[]).find(s=>s.id===sysId);
+  if(!sys) return;
+  sys.isSyntheticCase = !!checked;
+  sys.updatedAt = new Date().toISOString();
+  saveSystems();
+  try{addAuditRecord(sys,'system',(checked?'Marked':'Unmarked')+' as synthetic/demonstration case',sys.name,null,null,'User-initiated',null);}catch(e){}
+  renderSystemWorkspace();
+}
+
 // ── SYSTEM WORKSPACE (Level 2) ──
 function openSystemWorkspace(sys){
   if(!sys) return;
@@ -8923,9 +8969,14 @@ function renderSWOverview(sys){
         </div>
       </div>
       <button type="button" class="sw-cta-btn" style="width:100%;margin-top:14px;" onclick="swSetTab('profile')">View Master Profile</button>
+      <label data-rc-enhanced="1" style="display:flex;align-items:center;gap:8px;margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border);cursor:pointer;font-size:11.5px;color:var(--muted);">
+        <input type="checkbox" ${sys.isSyntheticCase?'checked':''} onchange="swToggleSyntheticCase('${sys.id}',this.checked)"/>
+        Synthetic / demonstration case <span style="color:var(--faint);">&mdash; no real organisation or natural person represented</span>
+      </label>
     </div>`;
 
   return `<div class="sw-overview">
+    ${sys.isSyntheticCase?'<div style="margin-bottom:16px;padding:10px 14px;background:var(--panel);border:0.5px solid var(--gold-2);border-radius:var(--radius-sm);font-family:var(--font-mono),monospace;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--gold-2);">Synthetic regulatory test case &mdash; no real organisation or natural person represented</div>':''}
     <div class="ov-layout">
       <div class="ov-left">${summaryHtml}</div>
       <div class="ov-right">
@@ -9274,6 +9325,9 @@ function renderSWExportAudiencePackages(sys){
         <div><div style="font-family:var(--font-mono),monospace;font-size:8.5px;color:var(--faint);margin-bottom:3px;">SYSTEM</div><div style="color:var(--ink);">${esc(sys.name)}</div></div>
         <div><div style="font-family:var(--font-mono),monospace;font-size:8.5px;color:var(--faint);margin-bottom:3px;">VERSION</div><div style="color:var(--ink);">${esc(sys.data?.sysVersion||'v1.0')}</div></div>
         <div><div style="font-family:var(--font-mono),monospace;font-size:8.5px;color:var(--faint);margin-bottom:3px;">DATE</div><div style="color:var(--ink);">${new Date().toLocaleDateString('en-GB')}</div></div>
+        <div><div style="font-family:var(--font-mono),monospace;font-size:8.5px;color:var(--faint);margin-bottom:3px;">EACE BUILD</div><div style="color:var(--ink);">${esc(BUILD_INFO.label())}</div></div>
+        <div><div style="font-family:var(--font-mono),monospace;font-size:8.5px;color:var(--faint);margin-bottom:3px;">EXPORT PACKAGE</div><div style="color:var(--ink);">v${esc(BUILD_INFO.exportPackageVersion)}</div></div>
+        ${sys.isSyntheticCase?'<div><div style="font-family:var(--font-mono),monospace;font-size:8.5px;color:var(--faint);margin-bottom:3px;">DATA STATUS</div><div style="color:var(--gold-2);">Synthetic test case</div></div>':''}
       </div>
     </div>
   </div>`;
@@ -13801,6 +13855,7 @@ function createSystemObject(overrides){
     status:    'Draft',          // Draft | Profile Complete | Assessed | Audit-ready | Archived
     version:   '1.0',
     pillar:    'P1',             // Current/last engine used
+    isSyntheticCase: false,      // true = demo/validation case with fabricated org & personal data — never a real customer
 
     // Master System Profile data (SSoT)
     profile: {},                 // Populated from the live MASTER_GROUPS form fields
@@ -13836,7 +13891,7 @@ function createAssessmentObject(sys, pillar){
 
     // Versioning — four-layer traceability
     assessmentVersion:   '1.0',
-    engineVersion:       'EACE COS v1.0',
+    engineVersion:       BUILD_INFO.label(),
     methodologyVersion:  'P1 v2.0.0 / P2A v1.0 / P2B v1.0 / P3 v1.0 / P4 v1.0',
     systemVersion:       sys.version || '1.0',
 
@@ -14020,7 +14075,9 @@ function createExportObject(sys, asm, format, audience, style){
     // Versioning
     systemVersion:       sys.version,
     assessmentVersion:   asm ? asm.assessmentVersion : null,
-    engineVersion:       'EACE COS v1.0',
+    engineVersion:       BUILD_INFO.label(),
+    exportPackageVersion: BUILD_INFO.exportPackageVersion,
+    syntheticCase:        !!sys.isSyntheticCase,
   };
 }
 
@@ -15896,9 +15953,14 @@ function updateProfileRing(sysId){
       +'<span style="font-family:var(--font-mono);font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--faint);">Readiness</span>'
       +'<span style="font-family:var(--font-mono);font-size:9px;color:'+(rPct>=80?'var(--green)':rPct>=40?'var(--gold)':'var(--amber)')+';">'+rPct+'%</span></div>'
       +'<div style="height:6px;background:var(--panel-2);border-radius:3px;overflow:hidden;"><div style="height:100%;width:'+rPct+'%;background:'+(rPct>=80?'var(--green)':rPct>=40?'var(--gold)':'var(--amber)')+';border-radius:3px;transition:width .5s ease;"></div></div></div>'
-      +'<button type="button" class="sw-cta-btn" style="width:100%;margin-top:14px;" onclick="swSetTab(\'profile\')">View Master Profile</button></div>';
+      +'<button type="button" class="sw-cta-btn" style="width:100%;margin-top:14px;" onclick="swSetTab(\'profile\')">View Master Profile</button>'
+      +'<label data-rc-enhanced="1" style="display:flex;align-items:center;gap:8px;margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border);cursor:pointer;font-size:11.5px;color:var(--muted);">'
+      +'<input type="checkbox" '+(sys.isSyntheticCase?'checked':'')+' onchange="swToggleSyntheticCase(\''+safeEsc(sys.id)+'\',this.checked)"/>'
+      +'Synthetic / demonstration case <span style="color:var(--faint);">&mdash; no real organisation or natural person represented</span></label></div>';
 
-    return '<div class="sw-overview"><div class="ov-layout"><div class="ov-left">'+summaryHtml+healthHtml+'</div><div class="ov-right">'
+    var syntheticBanner = sys.isSyntheticCase?'<div style="margin-bottom:16px;padding:10px 14px;background:var(--panel);border:0.5px solid var(--gold-2);border-radius:var(--radius-sm);font-family:var(--font-mono),monospace;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--gold-2);">Synthetic regulatory test case &mdash; no real organisation or natural person represented</div>':'';
+
+    return '<div class="sw-overview">'+syntheticBanner+'<div class="ov-layout"><div class="ov-left">'+summaryHtml+healthHtml+'</div><div class="ov-right">'
       +nextActionHtml+obligationsHtml+overlayHtml+evidenceHtml+assessmentsHtml+activityHtml+quickActionsHtml
       +'</div></div></div>';
   };
