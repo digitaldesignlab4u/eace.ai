@@ -8079,6 +8079,66 @@ OUTPUT STRUCTURE — MANDATORY INTERNAL ORGANISATION FOR THIS ARTEFACT: structur
 Include a RACI matrix, heat-map table or table-built timeline within the relevant heading above only where this specific artefact genuinely has multiple responsible roles, a risk-by-dimension profile, or dated milestones — never fabricate one merely to satisfy this list. Never rely on cell shading or fill colour for meaning; it is not preserved by this pipeline's export. Express status only through the closed badge-token vocabulary or plain Unicode block-bar gauges, written as ordinary table-cell text.
 FORENSIC MODE — CONDITIONAL: where the SYSTEM PROFILE states prior incidents or near-misses, or this run's attachments otherwise establish a specific incident affecting this system, and this output concerns incident detection or reporting, post-market monitoring, audit trail, or quality/fairness nonconformity handling, its Operational Artifact and Legal Analysis must include: Root Cause; Timeline; Affected Persons (by category or role only — never a named individual absent an explicit user-supplied identity, per the No Fabricated Facts rule); Evidence; CAPA; Lessons Learned; Corrective and Preventive Measures; Residual Risk; Verification After Remediation; Board Decision; Authority/Customer Communication — mark a genuinely inapplicable element NOT APPLICABLE rather than omitting it silently. Where no prior incident is indicated, do not apply this and do not speculate about a hypothetical one. Open this Forensic Mode content with one markdown blockquote line (starting with "> ") stating the incident reference and severity — this pipeline renders a blockquote line as a bordered callout box, giving the incident summary the same visual prominence as the coloured callout boxes elsewhere in this document standard.`);
 
+  // STEP 1 (v5.0.5-informed engine upgrade, approved sequence: mapping
+  // integrity -> artefact contract -> P0 -> P1 gaps -> validator ->
+  // regression) — GLOBAL OPERATIONAL ARTEFACT COMPLETENESS CONTRACT.
+  // Pillar-agnostic for P2A/P2B/P3/P4 (P1 stays analytical — isAnalytical/
+  // isP1BriefOutput above are untouched). Distinct from
+  // structuredArtefactFormat above: that governs the 7-part PRESENTATION
+  // layout every output already uses; this governs CONTENT completeness —
+  // the gap between describing what an artefact should contain and
+  // actually producing it. Added because the v5.0.5 gold-standard audit
+  // found current P2A/P2B outputs correctly naming the right governance
+  // concepts but frequently stopping at a topic-sentence description
+  // rather than the executable instrument itself (a named procedure with
+  // numbered steps, a populated matrix with real rows, a register with
+  // real fields) — the "operational anatomy" gap the audit's Part 6
+  // synthesis identified as the single largest systemic pattern.
+  // Deliberately does NOT import v5.0.5's page/block counts mechanically
+  // (see the closing sentence below) — ceremony without a control behind
+  // it is not compliance depth.
+  const isCompletenessContractPillar = pillar==='P2A' || pillar==='P2B' || pillar==='P3' || pillar==='P4';
+  const ARTEFACT_MIN_ANATOMY = {
+    SOP_PROCEDURE: 'Purpose; Scope; Definitions; Roles; minimum executable steps (numbered, in sequence) where the artefact involves a process; Triggers; Decision Criteria; Escalation; Evidence/Records; Monitoring; Review; Approval.',
+    MATRIX: 'Defined scales/criteria for every column (state what each value means, not just a column header); a populated structure with real rows for this system — never an empty template; Owner; Decision Consequence (what changes because of a given cell’s value); Evidence Linkage.',
+    REGISTER_LOG: 'Defined fields (named, not just implied); Owner; Retention period; Access/integrity control; Review cadence; usable row/entry rules (what triggers a new entry, in what format).',
+    FORM_TEMPLATE: 'All fields labelled; each field’s mandatory/optional state stated; a completion instruction (who fills it in, when, from what source); an approval/sign-off block where the underlying obligation requires one.',
+    POLICY: 'Purpose; Scope; Principles/Rules (the actual substantive rules, not a restatement of the legal requirement); Responsibilities; Exceptions; Escalation; Monitoring; Review; Approval.',
+    CONTRACT: 'Operative clauses with real obligations and parties/placeholder fields — not a description of what a clause should cover. A clause that only says "this instrument should address X" is a defect, not a clause.',
+    NOTICE: 'The actual deployable notice text a reader would see, in context (timing, placement, audience) — not a description of what a transparency notice should communicate.',
+    DPIA_FRIA: 'A completed assessment structure with real content: description of processing/deployment; necessity and proportionality; risk identification with likelihood/severity; safeguards/mitigations; residual risk; sign-off/review — not a checklist of what a DPIA/FRIA should contain.',
+  };
+  const artefactCompletenessContract = (!isCompletenessContractPillar || isMachineReadableExport) ? '' : (function(){
+    const probe = (String((out&&out.title)||'')+' '+String((out&&out.cat)||'')).toLowerCase();
+    const types = [];
+    const add=(t,re)=>{ if(re.test(probe)) types.push(t); };
+    add('DPIA_FRIA', /dpia|fria|impact assessment/);
+    add('CONTRACT', /contract|instrument|agreement|declaration|\bdpa\b/);
+    add('NOTICE', /notice|disclosure|notification|\blabel\b|marking/);
+    add('MATRIX', /matrix|dashboard|scorecard|\bmap\b/);
+    add('REGISTER_LOG', /register|\blog\b|logging|record|trail|audit/);
+    add('FORM_TEMPLATE', /\bform\b|template|checklist/);
+    add('POLICY', /policy|framework|governance|manual|code of conduct/);
+    add('SOP_PROCEDURE', /procedure|protocol|\bplan\b|\bsop\b|specification|implementation|management|assessment|pathway|instruction/);
+    if(!types.length) types.push('SOP_PROCEDURE');
+    const uniqueTypes = [...new Set(types)];
+    const anatomyLines = uniqueTypes.map(t => `- ${t.replace(/_/g,'/')}: ${ARTEFACT_MIN_ANATOMY[t]}`).join('\n');
+    return `
+
+OPERATIONAL ARTEFACT COMPLETENESS CONTRACT — MANDATORY:
+Before this output is complete, it must do all of the following, in order, for the topic it covers:
+1. Analyse the current state described in the system profile and supplied facts.
+2. Determine the applicable legal position (the binding requirement, sourced from this output’s specification and legal basis).
+3. Assess implementation status against that legal position — what is already in place, what is missing, marking anything not established as REQUIRED / NOT PROVIDED rather than inventing it.
+4. Define the operational response — what must be done, by whom, by when.
+5. Generate the actual adoptable artefact itself.
+6. Link it to evidence — Fact-Label Vocabulary tags, evidence references, or cross-output IDs, as applicable.
+A DESCRIPTION OF AN ARTEFACT IS NOT THE ARTEFACT. A sentence stating that a document "should include a risk matrix" without producing that matrix, populated for this system, is a defect — produce the matrix itself instead. The same applies to every artefact type below that this output touches; where an artefact type doesn’t apply to a given part of this output, do not force it.
+This output’s detected artefact type(s) and their non-negotiable minimum content anatomy:
+${anatomyLines}
+Do not mechanically copy any external reference material’s page count, block count, or section-numbering scheme merely because that reference used it — include a structural element here only where it adds a real decision rule, threshold, accountable role, or evidence requirement this artefact would otherwise lack.`;
+  })();
+
   const p1BriefFormat = isP1BriefOutput ? `
 
 P1 BRIEF OBLIGATION FORMAT — MANDATORY FOR THIS OUTPUT, OVERRIDES DRAFTING RULES 2-3, THE SECTION 10 QUESTION/LEGAL TEST/FACTS/ANALYSIS/RESULT/EVIDENCE STATUS/RESIDUAL UNCERTAINTY/ROUTING STRUCTURE, AND THE FULL SEVEN-HEADING FORM OF THE OUTPUT STRUCTURE ABOVE, FOR THIS OUTPUT ONLY:
@@ -8086,7 +8146,7 @@ This is not one of P1's core classification determinations (Traffic Light, Compl
 Present each obligation, overlay entry or evidence item this output covers as a compact line, not the full Question/Legal Test/Facts/Analysis/Result/Evidence Status/Residual Uncertainty/Routing sequence: [Obligation/item name] — [one to three sentence status referencing the governing classification] — [ROUTE TO … status and Legal Route tag, or NOT APPLICABLE]. Use a table where the content is naturally tabular (an overlay matrix, an evidence register, a sectoral list) rather than prose paragraphs.
 Do not pad this output to reach the indicative page count; a shorter, complete briefing is the correct and expected result here. Brevity applies to restating the underlying legal test — every fact still needs its Fact-Label Vocabulary tag, and every routing statement still needs its ROUTE TO status and Legal Route block per Section 4.` : '';
 
-  const perCall = `===== CURRENT OUTPUT — SUBORDINATE SPECIFICATION =====\n${entry.spec}${overlayInstruction}${qualityUpgrade}${structuredArtefactFormat}${p1BriefFormat}\n===== END CURRENT OUTPUT SPECIFICATION =====\n\nARTEFACT MODE:\n${artefactMode}\n\nNON-NEGOTIABLE DRAFTING RULES:\n1. Generate exactly this one artefact and execute every legally valid and applicable requirement of its specification.\n2. Give the artefact its own complete legal basis. Do not omit analysis because the same Regulation or a related Article appears elsewhere; preserve each distinct Article, paragraph, Annex provision, legal test and operational consequence.${isP1BriefOutput ? ' For THIS output, this rule is superseded by the P1 BRIEF OBLIGATION FORMAT above: cite the Classification Control Record instead of re-deriving it.' : ''}\n3. Avoid only genuinely identical repetition. Cross-reference another EACE output where appropriate, but never use a cross-reference to omit content the present artefact must contain to stand alone.${isP1BriefOutput ? ' For THIS output, the P1 BRIEF OBLIGATION FORMAT above governs instead: citing the Classification Control Record for the underlying legal test is the required, not the exceptional, form.' : ''}\n4. Every paragraph, table and annex must add legal, operational or evidentiary value. Do not duplicate a table in prose or inflate length with filler.\n5. Treat supplied system facts as user-supplied facts, not independently verified facts. Never invent missing facts or identities.\n6. For P2A, P2B, P3 and P4, include executable operational content appropriate to the artefact.\n7. Include required sections, instruments, templates and evidence fields, but mark nonexistent evidence as REQUIRED / NOT PROVIDED rather than fabricating it.\n8. Use “shall” or “must” only for binding requirements and assigned mandatory actions; use declarative language for findings and analysis.\n9. Produce the substantive artefact, not an outline, preview, prompt commentary or a multi-page explanation of a missing input. State a blocker once and continue all non-blocked content.\n10. End when legally complete and operationally sufficient. The indicative length is guidance, never a quota. If length must trade off against the fixed output budget, compress the Executive Dashboard and Executive Summary first; the Legal Analysis, Operational Artifact and Evidence Mapping sections never do, since the Evidence Layer and downstream pillars depend on them.`;
+  const perCall = `===== CURRENT OUTPUT — SUBORDINATE SPECIFICATION =====\n${entry.spec}${overlayInstruction}${qualityUpgrade}${structuredArtefactFormat}${artefactCompletenessContract}${p1BriefFormat}\n===== END CURRENT OUTPUT SPECIFICATION =====\n\nARTEFACT MODE:\n${artefactMode}\n\nNON-NEGOTIABLE DRAFTING RULES:\n1. Generate exactly this one artefact and execute every legally valid and applicable requirement of its specification.\n2. Give the artefact its own complete legal basis. Do not omit analysis because the same Regulation or a related Article appears elsewhere; preserve each distinct Article, paragraph, Annex provision, legal test and operational consequence.${isP1BriefOutput ? ' For THIS output, this rule is superseded by the P1 BRIEF OBLIGATION FORMAT above: cite the Classification Control Record instead of re-deriving it.' : ''}\n3. Avoid only genuinely identical repetition. Cross-reference another EACE output where appropriate, but never use a cross-reference to omit content the present artefact must contain to stand alone.${isP1BriefOutput ? ' For THIS output, the P1 BRIEF OBLIGATION FORMAT above governs instead: citing the Classification Control Record for the underlying legal test is the required, not the exceptional, form.' : ''}\n4. Every paragraph, table and annex must add legal, operational or evidentiary value. Do not duplicate a table in prose or inflate length with filler.\n5. Treat supplied system facts as user-supplied facts, not independently verified facts. Never invent missing facts or identities.\n6. For P2A, P2B, P3 and P4, include executable operational content appropriate to the artefact.\n7. Include required sections, instruments, templates and evidence fields, but mark nonexistent evidence as REQUIRED / NOT PROVIDED rather than fabricating it.\n8. Use “shall” or “must” only for binding requirements and assigned mandatory actions; use declarative language for findings and analysis.\n9. Produce the substantive artefact, not an outline, preview, prompt commentary or a multi-page explanation of a missing input. State a blocker once and continue all non-blocked content.\n10. End when legally complete and operationally sufficient. The indicative length is guidance, never a quota. If length must trade off against the fixed output budget, compress the Executive Dashboard and Executive Summary first; the Legal Analysis, Operational Artifact and Evidence Mapping sections never do, since the Evidence Layer and downstream pillars depend on them.`;
   return {cacheable, perCall, asString:cacheable+'\n\n'+perCall};
 }
 

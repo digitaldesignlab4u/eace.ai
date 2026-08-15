@@ -14,6 +14,7 @@ python3 tests/regression.py              # app's built-in classification self-te
 python3 tests/verify_build_info.py       # BUILD_INFO + isSyntheticCase propagation, all real export paths
 python3 tests/verify_canonical_mapping.py  # P2A/P2B canonical anchor resolution, expect 53/53
 python3 tests/verify_mapping_safeguard.py  # CANONICAL SPEC MAPPING FAILURE blocking-error path
+python3 tests/verify_step1_contract.py     # operational artefact completeness contract (P2A/P2B/P3/P4 only, not P1/CSV)
 ```
 
 All need Playwright with a Chromium binary available (see
@@ -31,4 +32,8 @@ touching BUILD_INFO, `isSyntheticCase`, or the export pipeline
 `buildOutputRegistry` — these are the P2A/P2B canonical-spec routing layer
 documented in the Step 0 audit finding (see git log), and a regression
 here silently degrades every downstream P2A/P2B output back to the
-front-matter-status-board mismatch that fix corrected.
+front-matter-status-board mismatch that fix corrected. Run
+`verify_step1_contract.py` before any commit touching `buildSystemPrompt`
+or the artefact-type detection heuristic inside it — confirms the
+completeness contract stays scoped to P2A/P2B/P3/P4 non-CSV outputs and
+never leaks into P1 or a machine-readable export.
