@@ -15,6 +15,7 @@ python3 tests/verify_build_info.py       # BUILD_INFO + isSyntheticCase propagat
 python3 tests/verify_canonical_mapping.py  # P2A/P2B canonical anchor resolution, expect 53/53
 python3 tests/verify_mapping_safeguard.py  # CANONICAL SPEC MAPPING FAILURE blocking-error path
 python3 tests/verify_step1_contract.py     # operational artefact completeness contract (P2A/P2B/P3/P4 only, not P1/CSV)
+python3 tests/verify_step2_p0_enrichment.py  # P0 Human Oversight (P2A O08, P2B O09) + FRIA matrix (P2B O06) targeting
 ```
 
 All need Playwright with a Chromium binary available (see

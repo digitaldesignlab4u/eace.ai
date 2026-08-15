@@ -8139,6 +8139,67 @@ ${anatomyLines}
 Do not mechanically copy any external reference material’s page count, block count, or section-numbering scheme merely because that reference used it — include a structural element here only where it adds a real decision rule, threshold, accountable role, or evidence requirement this artefact would otherwise lack.`;
   })();
 
+  // STEP 2 (v5.0.5-informed engine upgrade) — P0 OPERATIONAL ENRICHMENT.
+  // Targeted, per-output additions for the two P0-critical gaps the audit
+  // found (Part 6C #1/#2 of the delivered matrix): Human Oversight on both
+  // pillars, and the P2B Fundamental Rights Matrix. Correction folded in
+  // here versus the original approval message: that message referred to
+  // "P2B O08" for Human Oversight, tracing back to a mislabelling in the
+  // earlier manual audit (which read canonical-text POSITION 8 content
+  // without going through the corrected Step 0 mapping). The current
+  // EACE JS catalogue's real P2B Human Oversight output is O09 ("Human
+  // oversight deployment protocol", Art. 26(5)) — P2B O08 is "Art. 50
+  // transparency notice package", an unrelated output. Targets P2A O08
+  // (unaffected by the correction), P2B O09, and P2B O06 (the dedicated
+  // FRIA catalogue slot — P2B O05/DPIA shares the same canonical section
+  // but is left untouched here; the Fundamental Rights Matrix belongs to
+  // the FRIA-labelled output specifically). Threshold discipline is
+  // explicit in both Human Oversight blocks and the FRIA block: a numeric
+  // control (a sampling rate, a review cadence, a rights-count trigger)
+  // must be labelled BINDING / SOURCE-SUPPORTED / INTERNAL RECOMMENDED
+  // CONTROL — v5.0.5's own unlabelled numeric minima (e.g. "≥3 rights ->
+  // Legal Counsel") are never asserted here as if they were law.
+  const p0OperationalEnrichment = (function(){
+    if(pillar==='P2A' && out && out.code==='O08') return `
+
+P0 OPERATIONAL ENRICHMENT — HUMAN OVERSIGHT (PROVIDER DESIGN) — MANDATORY FOR THIS OUTPUT:
+Integrate the following into this output's existing Operational Artifact — do not add a separate section list on top of the specification above:
+- Oversight roles and the minimum competence this system's oversight model assumes of the person filling each role.
+- Monitoring points: where in the system's operation a human is meant to observe or check the AI's behaviour.
+- Intervention criteria: the conditions under which a human is expected to intervene.
+- Override, Stop and Escalation: how an override is exercised, how the system can be halted, and where an unresolved situation escalates to.
+- Automation-bias controls: at least one concrete measure against over-reliance on the AI's output (e.g. requiring the reviewer to record an independent assessment before seeing the AI's confidence score, mandatory periodic blind review, or an equivalent control) — do not merely name "automation bias" as a risk without a countermeasure.
+- Oversight-effectiveness measures: how the organisation would know whether human oversight is actually working, not merely present.
+- Fatigue/overload safeguards, where the oversight volume or repetition in this system's declared deployment context makes fatigue a realistic risk — state explicitly when this does not apply rather than inventing a safeguard for a low-volume or infrequent-review system.
+- A periodic effectiveness review: cadence, what is reviewed, who conducts it.
+- Evidence and logs: what oversight activity is recorded, and how.
+- Provider-to-deployer instructions: what the provider must hand over for oversight to function as designed once operational — this design output does not itself run oversight.
+THRESHOLD DISCIPLINE: classify every numeric oversight threshold you state (a sampling rate, a review-time ceiling, a fatigue-indicator trigger) as exactly one of [BINDING — cite the specific legal provision requiring this figure], [SOURCE-SUPPORTED — cite the harmonised standard, regulatory guidance or established practice it is drawn from], or [INTERNAL RECOMMENDED CONTROL — a reasonable operational choice, not a legal requirement]. Never present an unsupported numeric threshold as if it were a binding legal minimum; where you cannot support a specific figure with a citation, either describe the control qualitatively without a number, or mark it [INTERNAL RECOMMENDED CONTROL — SUGGESTED, NOT MANDATED].`;
+    if(pillar==='P2B' && out && out.code==='O09') return `
+
+P0 OPERATIONAL ENRICHMENT — HUMAN OVERSIGHT (DEPLOYER IMPLEMENTATION) — MANDATORY FOR THIS OUTPUT:
+This is a genuine deployment protocol, not a restatement of the provider's design. Integrate the following into this output's existing Operational Artifact:
+- The assigned role responsible for oversight in this deployment, and the competence that role requires.
+- Shift/handover procedure, where oversight spans shifts or more than one person over time — state explicitly when this does not apply for a single-operator or low-volume deployment.
+- Review frequency: how often oversight activity actually occurs in this deployment context.
+- The intervention/override/stop workflow, as concrete operational steps a reviewer follows, not a restatement of the provider's technical override mechanism.
+- An escalation matrix naming who is escalated to, in what circumstance, and within what timeframe.
+- Fallback: what happens to the underlying process while the AI system is overridden, stopped, or under escalation.
+- The incident trigger: what oversight finding causes this to be logged as an incident and routed to this system's incident detection and reporting output.
+- A competency review: how the organisation confirms oversight personnel remain competent over time.
+- An effectiveness review: cadence, what is assessed, who conducts it, and what happens if oversight is found ineffective.
+- Evidence/logging: what is recorded for each oversight action, by whom, and where it is retained.
+THRESHOLD DISCIPLINE: apply the same [BINDING] / [SOURCE-SUPPORTED] / [INTERNAL RECOMMENDED CONTROL] classification to any numeric threshold you state, exactly as required on the provider-design side — never present an unsupported figure as binding law.`;
+    if(pillar==='P2B' && out && out.code==='O06') return `
+
+P0 OPERATIONAL ENRICHMENT — FUNDAMENTAL RIGHTS MATRIX — MANDATORY FOR THIS OUTPUT:
+Generate a structured Fundamental Rights Matrix as a real, populated table for this system — not a description of what such a matrix should contain — using exactly these columns, in this order: Fundamental Right | Affected Person/Group | Impact Mechanism | Existing Safeguard | Likelihood | Severity | Reversibility (where relevant) | Residual Impact/Risk | Additional Measure | Owner | Remedy | Evidence Reference.
+Test the complete universe of fundamental rights genuinely capable of being affected by this system's declared deployment context (drawing on the EU Charter of Fundamental Rights and any sector-specific rights relevant to that context) — do not mechanically limit the matrix to, or pad it out to, any fixed minimum number of rights. Where a right is not materially affected, you may exclude it from the populated matrix, but record the exclusion and its justification in one line immediately below the matrix (e.g. "Right to X — excluded: [reason specific to this system/deployment]"), so the matrix's completeness can be audited rather than assumed.
+Reversibility applies where the impact concerns an action or decision that can or cannot be undone — mark it "N/A" with a one-line reason where the right at issue has no meaningful reversibility dimension, rather than forcing an artificial value.
+LEGAL COUNSEL ESCALATION: do not state a fixed numeric trigger (such as "3 or more rights at High risk") as if it were a binding legal requirement for mandatory Legal Counsel review — no such fixed numeric threshold is established in the AI Act, GDPR, or the EU Charter itself. Where you recommend a Legal Counsel review trigger, label it explicitly [INTERNAL GOVERNANCE POLICY — RECOMMENDED, NOT A STATUTORY REQUIREMENT] and state the organisation-specific rationale (e.g. any single right assessed at High risk, or a cumulative pattern across rights) rather than presenting a specific number as law.`;
+    return '';
+  })();
+
   const p1BriefFormat = isP1BriefOutput ? `
 
 P1 BRIEF OBLIGATION FORMAT — MANDATORY FOR THIS OUTPUT, OVERRIDES DRAFTING RULES 2-3, THE SECTION 10 QUESTION/LEGAL TEST/FACTS/ANALYSIS/RESULT/EVIDENCE STATUS/RESIDUAL UNCERTAINTY/ROUTING STRUCTURE, AND THE FULL SEVEN-HEADING FORM OF THE OUTPUT STRUCTURE ABOVE, FOR THIS OUTPUT ONLY:
@@ -8146,7 +8207,7 @@ This is not one of P1's core classification determinations (Traffic Light, Compl
 Present each obligation, overlay entry or evidence item this output covers as a compact line, not the full Question/Legal Test/Facts/Analysis/Result/Evidence Status/Residual Uncertainty/Routing sequence: [Obligation/item name] — [one to three sentence status referencing the governing classification] — [ROUTE TO … status and Legal Route tag, or NOT APPLICABLE]. Use a table where the content is naturally tabular (an overlay matrix, an evidence register, a sectoral list) rather than prose paragraphs.
 Do not pad this output to reach the indicative page count; a shorter, complete briefing is the correct and expected result here. Brevity applies to restating the underlying legal test — every fact still needs its Fact-Label Vocabulary tag, and every routing statement still needs its ROUTE TO status and Legal Route block per Section 4.` : '';
 
-  const perCall = `===== CURRENT OUTPUT — SUBORDINATE SPECIFICATION =====\n${entry.spec}${overlayInstruction}${qualityUpgrade}${structuredArtefactFormat}${artefactCompletenessContract}${p1BriefFormat}\n===== END CURRENT OUTPUT SPECIFICATION =====\n\nARTEFACT MODE:\n${artefactMode}\n\nNON-NEGOTIABLE DRAFTING RULES:\n1. Generate exactly this one artefact and execute every legally valid and applicable requirement of its specification.\n2. Give the artefact its own complete legal basis. Do not omit analysis because the same Regulation or a related Article appears elsewhere; preserve each distinct Article, paragraph, Annex provision, legal test and operational consequence.${isP1BriefOutput ? ' For THIS output, this rule is superseded by the P1 BRIEF OBLIGATION FORMAT above: cite the Classification Control Record instead of re-deriving it.' : ''}\n3. Avoid only genuinely identical repetition. Cross-reference another EACE output where appropriate, but never use a cross-reference to omit content the present artefact must contain to stand alone.${isP1BriefOutput ? ' For THIS output, the P1 BRIEF OBLIGATION FORMAT above governs instead: citing the Classification Control Record for the underlying legal test is the required, not the exceptional, form.' : ''}\n4. Every paragraph, table and annex must add legal, operational or evidentiary value. Do not duplicate a table in prose or inflate length with filler.\n5. Treat supplied system facts as user-supplied facts, not independently verified facts. Never invent missing facts or identities.\n6. For P2A, P2B, P3 and P4, include executable operational content appropriate to the artefact.\n7. Include required sections, instruments, templates and evidence fields, but mark nonexistent evidence as REQUIRED / NOT PROVIDED rather than fabricating it.\n8. Use “shall” or “must” only for binding requirements and assigned mandatory actions; use declarative language for findings and analysis.\n9. Produce the substantive artefact, not an outline, preview, prompt commentary or a multi-page explanation of a missing input. State a blocker once and continue all non-blocked content.\n10. End when legally complete and operationally sufficient. The indicative length is guidance, never a quota. If length must trade off against the fixed output budget, compress the Executive Dashboard and Executive Summary first; the Legal Analysis, Operational Artifact and Evidence Mapping sections never do, since the Evidence Layer and downstream pillars depend on them.`;
+  const perCall = `===== CURRENT OUTPUT — SUBORDINATE SPECIFICATION =====\n${entry.spec}${overlayInstruction}${qualityUpgrade}${structuredArtefactFormat}${artefactCompletenessContract}${p0OperationalEnrichment}${p1BriefFormat}\n===== END CURRENT OUTPUT SPECIFICATION =====\n\nARTEFACT MODE:\n${artefactMode}\n\nNON-NEGOTIABLE DRAFTING RULES:\n1. Generate exactly this one artefact and execute every legally valid and applicable requirement of its specification.\n2. Give the artefact its own complete legal basis. Do not omit analysis because the same Regulation or a related Article appears elsewhere; preserve each distinct Article, paragraph, Annex provision, legal test and operational consequence.${isP1BriefOutput ? ' For THIS output, this rule is superseded by the P1 BRIEF OBLIGATION FORMAT above: cite the Classification Control Record instead of re-deriving it.' : ''}\n3. Avoid only genuinely identical repetition. Cross-reference another EACE output where appropriate, but never use a cross-reference to omit content the present artefact must contain to stand alone.${isP1BriefOutput ? ' For THIS output, the P1 BRIEF OBLIGATION FORMAT above governs instead: citing the Classification Control Record for the underlying legal test is the required, not the exceptional, form.' : ''}\n4. Every paragraph, table and annex must add legal, operational or evidentiary value. Do not duplicate a table in prose or inflate length with filler.\n5. Treat supplied system facts as user-supplied facts, not independently verified facts. Never invent missing facts or identities.\n6. For P2A, P2B, P3 and P4, include executable operational content appropriate to the artefact.\n7. Include required sections, instruments, templates and evidence fields, but mark nonexistent evidence as REQUIRED / NOT PROVIDED rather than fabricating it.\n8. Use “shall” or “must” only for binding requirements and assigned mandatory actions; use declarative language for findings and analysis.\n9. Produce the substantive artefact, not an outline, preview, prompt commentary or a multi-page explanation of a missing input. State a blocker once and continue all non-blocked content.\n10. End when legally complete and operationally sufficient. The indicative length is guidance, never a quota. If length must trade off against the fixed output budget, compress the Executive Dashboard and Executive Summary first; the Legal Analysis, Operational Artifact and Evidence Mapping sections never do, since the Evidence Layer and downstream pillars depend on them.`;
   return {cacheable, perCall, asString:cacheable+'\n\n'+perCall};
 }
 
