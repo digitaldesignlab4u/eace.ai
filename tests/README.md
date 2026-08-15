@@ -1,0 +1,26 @@
+# Tests
+
+No formal test framework — these are headless-browser scripts against the
+live app, since `index.html` has no build step to hook a real test runner
+into. See `CLAUDE.md` at the repo root for why this matters (the
+reassignment-shadowing gotcha means reading the source isn't sufficient
+evidence that a fix works).
+
+## Running
+
+```bash
+python3 -m http.server 8899 &      # serve the repo root
+python3 tests/regression.py        # app's built-in classification self-test, expect 10/10
+python3 tests/verify_build_info.py # BUILD_INFO + isSyntheticCase propagation, all real export paths
+```
+
+Both need Playwright with a Chromium binary available (see
+`CHROMIUM_PATH` at the top of each script — adjust if your environment's
+binary lives elsewhere). Both exit non-zero on any failed check or page
+error, so they're safe to chain with `&&` before a commit/push.
+
+Run `regression.py` before any commit touching classification, routing,
+or shared workspace state. Run `verify_build_info.py` before any commit
+touching BUILD_INFO, `isSyntheticCase`, or the export pipeline
+(`__eaceV32`/`__eaceV42`/`__eaceV44`, `exportSystemJSON`,
+`buildSingleOutputDocxBlob`).
