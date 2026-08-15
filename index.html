@@ -7575,6 +7575,45 @@ function _sliceAround(text, index, before, after){
   if(index<0) return '';
   return text.slice(Math.max(0,index-(before||1200)), Math.min(text.length,index+(after||5000)));
 }
+// STEP 0 canonical-mapping audit finding (deterministic replica of the
+// search below, run against the decoded P2A/P2B canonical texts offline):
+// the candidate-priority search resolves to the FIRST occurrence of any
+// candidate string anywhere in the canonical text. Both P2A and P2B open
+// with an early "COMPLIANCE PACKAGE STATUS BOARD" table that lists every
+// output's number/title/doc-ID as a [PENDING] placeholder row, tens of
+// thousands of characters before the real per-output sections begin — a
+// short candidate (a bare output number, or a title that also appears
+// verbatim in that status-board row) matches there first and wins, so the
+// function silently returned that placeholder-table fragment instead of
+// the real section for most P2A/P2B outputs. Confirmed empirically (not
+// just by reading source — see CLAUDE.md's verification discipline) via
+// tests/verify_canonical_mapping.py. OUTPUT_CANONICAL_ANCHORS gives each
+// P2A/P2B output an explicit, content-verified anchor to its real
+// "OUTPUT NN ·" header — or `null` where no dedicated canonical section
+// exists for that catalogue entry at all (confirmed by keyword search
+// across the full canonical text, not assumed) — and is consulted before
+// the legacy candidate search, which remains the fallback for P1/P3/P4 and
+// for any P2A/P2B code not covered here. Numbers reflect the CURRENT P2A/
+// P2B canonical text's own internal OUTPUT numbering, which has drifted
+// from the JS catalogue's O-codes on both pillars — this map does NOT
+// change catalogue codes, order, or count; it only fixes which canonical
+// section each code resolves to. `null` entries are catalogue outputs with
+// no matching canonical prose (Step 0 audit); they get the same graceful
+// minimal-spec fallback the search below already uses for P1/P3/P4 misses,
+// instead of a misleading placeholder-table match.
+const OUTPUT_CANONICAL_ANCHORS = Object.freeze({
+  P2A: {
+    O01:1, O02:2, O03:3, O04:4, O05:4, O06:6, O07:7, O08:8, O09:9, O10:9,
+    O11:11, O12:12, O13:13, O14:14, O15:15, O16:16, O17:17, O18:18, O19:19,
+    O20:20, O21:21, O22:22, O23:23, O24:null, O25:null, O26:26, O27:27,
+    O28:28, O29:null, O30:null, O31:null,
+  },
+  P2B: {
+    O01:1, O02:null, O03:3, O04:4, O05:25, O06:25, O07:26, O08:14, O09:8,
+    O10:7, O11:19, O12:18, O13:9, O14:null, O15:31, O16:20, O17:30,
+    O18:null, O19:29, O20:22, O21:22, O22:24,
+  },
+});
 function extractCanonicalOutputBlock(pillar, out){
   // Some P1 outputs (the two Family A deep-dive appendices) are their own
   // standalone canonical documents, not a section inside the main P1
@@ -7586,6 +7625,28 @@ function extractCanonicalOutputBlock(pillar, out){
   }
   const full = getCanonicalFullText(pillar);
   if(!full || !out) return '';
+  const anchorMap = OUTPUT_CANONICAL_ANCHORS[pillar];
+  if(anchorMap && Object.prototype.hasOwnProperty.call(anchorMap, out.code)){
+    const anchorNum = anchorMap[out.code];
+    if(anchorNum == null){
+      return `[NO DEDICATED CANONICAL SECTION FOUND for this output — verified via the Step 0 canonical-mapping audit; no per-output section exists in the canonical prompt text for this catalogue entry.]\nOutput: ${out.title}\nLegal basis: ${out.article||'—'}\nCategory: ${out.cat||'—'}\nGenerate this output to the same rigour as all other outputs in this engine, applying the referenced legal basis and any cross-cutting requirements described elsewhere in the canonical prompt.`;
+    }
+    const nn = String(anchorNum).padStart(2,'0');
+    const anchorHit = full.indexOf(`\nOUTPUT ${nn}  ·`);
+    if(anchorHit >= 0){
+      const start = anchorHit + 1;
+      let end = Math.min(full.length, start + 18000);
+      const nextPatterns=['\nOutput ','\nOUTPUT ','\n#### Output ','\n### Output '];
+      for(const p of nextPatterns){
+        const n = full.indexOf(p, start + 40);
+        if(n > start && n < end) end = n;
+      }
+      return full.slice(start, end);
+    }
+    // Anchor configured but not found in this canonical text (e.g. the
+    // text was regenerated with a different header format) — fall through
+    // to the legacy candidate search below rather than failing silently.
+  }
   const lower = full.toLowerCase();
   const titleWords = String(out.title||'').split(/[\s,()/-]+/).filter(w=>w.length>4);
   const titlePhrases = [];
