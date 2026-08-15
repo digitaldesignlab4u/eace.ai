@@ -7614,6 +7614,34 @@ const OUTPUT_CANONICAL_ANCHORS = Object.freeze({
     O18:null, O19:29, O20:22, O21:22, O22:24,
   },
 });
+// canonicalSpecStatus registry, queryable by Step 4's completeness validator
+// and by anything that needs to know a P2A/P2B output's mapping health
+// without re-running extraction: MAPPED (anchor resolved) / NO_DEDICATED_
+// SECTION (declared gap, catalogue output with no matching canonical prose
+// — see the Step 0 audit) / MISSING (an anchor was expected but could not
+// be resolved at runtime — see CANONICAL_SPEC_MAPPING_FAILURES) /
+// PENDING_VERIFICATION (declared, not yet resolved this session) /
+// UNCLASSIFIED (pillar/code outside OUTPUT_CANONICAL_ANCHORS — P1/P3/P4,
+// or any future P2A/P2B code not yet added to the map — legacy fuzzy
+// search still applies here, unaffected by this safeguard).
+const CANONICAL_SPEC_STATUS = {};
+(function initCanonicalSpecStatus(){
+  for(const p of Object.keys(OUTPUT_CANONICAL_ANCHORS)){
+    for(const code of Object.keys(OUTPUT_CANONICAL_ANCHORS[p])){
+      CANONICAL_SPEC_STATUS[p+':'+code] = (OUTPUT_CANONICAL_ANCHORS[p][code]==null) ? 'NO_DEDICATED_SECTION' : 'PENDING_VERIFICATION';
+    }
+  }
+})();
+function getCanonicalSpecStatus(pillar, code){
+  return CANONICAL_SPEC_STATUS[pillar+':'+code] || 'UNCLASSIFIED';
+}
+// Audit trail for CANONICAL SPEC MAPPING FAILURE — EXECUTION BLOCKED events
+// (see extractCanonicalOutputBlock below). Expected to stay empty against a
+// canonical text matching the anchors above; a non-empty array here means
+// the canonical prompt text was regenerated/edited in a way that broke a
+// declared P2A/P2B anchor and generation was blocked rather than silently
+// degraded to the pre-Step-0 front-matter mismatch.
+const CANONICAL_SPEC_MAPPING_FAILURES = [];
 function extractCanonicalOutputBlock(pillar, out){
   // Some P1 outputs (the two Family A deep-dive appendices) are their own
   // standalone canonical documents, not a section inside the main P1
@@ -7629,6 +7657,7 @@ function extractCanonicalOutputBlock(pillar, out){
   if(anchorMap && Object.prototype.hasOwnProperty.call(anchorMap, out.code)){
     const anchorNum = anchorMap[out.code];
     if(anchorNum == null){
+      CANONICAL_SPEC_STATUS[pillar+':'+out.code] = 'NO_DEDICATED_SECTION';
       return `[NO DEDICATED CANONICAL SECTION FOUND for this output — verified via the Step 0 canonical-mapping audit; no per-output section exists in the canonical prompt text for this catalogue entry.]\nOutput: ${out.title}\nLegal basis: ${out.article||'—'}\nCategory: ${out.cat||'—'}\nGenerate this output to the same rigour as all other outputs in this engine, applying the referenced legal basis and any cross-cutting requirements described elsewhere in the canonical prompt.`;
     }
     const nn = String(anchorNum).padStart(2,'0');
@@ -7641,11 +7670,26 @@ function extractCanonicalOutputBlock(pillar, out){
         const n = full.indexOf(p, start + 40);
         if(n > start && n < end) end = n;
       }
+      CANONICAL_SPEC_STATUS[pillar+':'+out.code] = 'MAPPED';
       return full.slice(start, end);
     }
-    // Anchor configured but not found in this canonical text (e.g. the
-    // text was regenerated with a different header format) — fall through
-    // to the legacy candidate search below rather than failing silently.
+    // Anchor declared for this output but not found in the live canonical
+    // text (e.g. the canonical prompt was regenerated with a different
+    // header format). This output is EXPECTED to have a dedicated
+    // canonical section — silently falling through to the legacy fuzzy
+    // search would re-introduce the exact front-matter-status-board
+    // mismatch Step 0 fixed. Block instead of degrading silently.
+    const failureRecord = {
+      pillar, outputCode: out.code, expectedAnchor: 'OUTPUT '+nn,
+      canonicalPromptVersion: (CANONICAL_PROMPTS[pillar]||{}).version || 'unknown',
+      extractionResult: 'NOT_FOUND',
+      failureReason: 'Declared canonical anchor header "\\nOUTPUT '+nn+'  ·" not present in the canonical prompt text at runtime.',
+      ts: new Date().toISOString(),
+    };
+    CANONICAL_SPEC_MAPPING_FAILURES.push(failureRecord);
+    CANONICAL_SPEC_STATUS[pillar+':'+out.code] = 'MISSING';
+    try{ logAudit('engine-integrity', 'CANONICAL SPEC MAPPING FAILURE — EXECUTION BLOCKED — '+pillar+'/'+out.code, pillar); }catch(e){}
+    throw new Error('CANONICAL SPEC MAPPING FAILURE — EXECUTION BLOCKED\n'+JSON.stringify(failureRecord, null, 2));
   }
   const lower = full.toLowerCase();
   const titleWords = String(out.title||'').split(/[\s,()/-]+/).filter(w=>w.length>4);
