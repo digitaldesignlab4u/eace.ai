@@ -53007,9 +53007,43 @@ window.exportUnifiedDOCX=downloadDocx;
 window.exportSystemDOCX=function(sysId,styleId){return downloadDocx(sysId,'complete');};
 window.rcExportPrompt=async function(sysId,pillar,type){const s=activeSystem(sysId),items=collectOutputs(s).filter(o=>o.pillar===String(pillar).toUpperCase());if(type==='docx')return downloadDocx(sysId,pillar);if(!items.length)return showToast('No completed '+pillar+' outputs.','var(--amber)');const old=s.generatedOutputs,oldP=s.pillar;s.generatedOutputs=items;s.pillar=String(pillar).toUpperCase();try{if(type==='pdf')return await exportSystemPDF(s.id,'regulator');if(type==='zip')return await exportRegulatoryZIP(s.id);}finally{s.generatedOutputs=old;s.pillar=oldP;}};
 const oldImport=window.importPortfolio;
+// REASSIGNMENT-SHADOWING FIX (see CLAUDE.md "gotcha"): this window.importPortfolio
+// assignment is the one actually wired to the file input's onchange -- the earlier
+// bare `function importPortfolio(e){...}` declaration (~line 6009) is dead, shadowed
+// by this later window.X= assignment, same class of bug as renderSWExport/exportSystemJSON
+// found earlier. It had two real gaps against jsonPayload()'s actual export shape:
+// (1) for a single-case export, generatedOutputs/evidence/auditRecords/attachments are
+// top-level payload siblings of `system`, not nested inside it, so re-importing a
+// single-case JSON export silently dropped every generated output and all evidence/
+// audit history; (2) whole-workspace exports use schema:'EACE_COMPLETE_WORKSPACE_EXPORT_V45'
+// (see workspacePayload()), never the old exportType:'complete-workspace-backup' marker
+// this checked for, so `replace` was always false for a real backup file and
+// settings/organisation were never read at all on that path. Both fixes below are
+// additive merges -- every previously-accepted payload shape still works unchanged.
 window.importPortfolio=function(e){
   const f=e&&e.target&&e.target.files&&e.target.files[0];if(!f)return;
-  const r=new FileReader();r.onload=function(){try{const p=JSON.parse(r.result),inc=Array.isArray(p)?p:((p.workspace&&p.workspace.systems)||p.systems||(p.system?[p.system]:[]));if(!inc.length)throw new Error('No systems found');const normalized=inc.map(x=>stabilizeSystem(JSON.parse(JSON.stringify(x))));const replace=p&&p.exportType==='complete-workspace-backup';if(replace){WORKSPACE.systems=normalized;st.systems=normalized;}else{const base=(WORKSPACE.systems&&WORKSPACE.systems.length?WORKSPACE.systems:st.systems)||[],ids=new Set(base.map(x=>String(x.id)));normalized.forEach(s=>{if(ids.has(String(s.id)))s.id='sys_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);base.push(s)});WORKSPACE.systems=base;st.systems=base;}WORKSPACE.activeId=(p.workspace&&p.workspace.activeId)||p.activeId||(normalized[0]&&normalized[0].id)||WORKSPACE.activeId;st.activeId=WORKSPACE.activeId;try{if(p.executionCheckpoints)Object.entries(p.executionCheckpoints).forEach(([k,v])=>{if(k.startsWith('eace_exec_v1_'))localStorage.setItem(k,typeof v==='string'?v:JSON.stringify(v))});}catch(_e){};try{saveWorkspace();saveSystems();}catch(_e){};try{renderSystemsTab();}catch(_e){}showToast('Import completed · '+normalized.length+' system(s) · '+normalized.reduce((n,s)=>n+s.generatedOutputs.length,0)+' outputs recovered.','var(--green)');}catch(err){console.error(err);showToast('Import failed: '+String(err.message||err),'var(--red-bright)');}finally{if(e&&e.target)e.target.value='';}};r.onerror=()=>showToast('Import failed: file could not be read.','var(--red-bright)');r.readAsText(f);
+  const r=new FileReader();r.onload=function(){try{
+    const p=JSON.parse(r.result),
+      inc=Array.isArray(p)?p:((p.workspace&&p.workspace.systems)||p.systems||(p.system?[Object.assign({},p.system,{
+        generatedOutputs:p.system.generatedOutputs||p.generatedOutputs||[],
+        evidence:p.system.evidence||p.evidence||[],
+        auditRecords:p.system.auditRecords||p.auditRecords||[],
+        attachments:p.system.attachments||p.attachments||[]
+      })]:[]));
+    if(!inc.length)throw new Error('No systems found');
+    const normalized=inc.map(x=>stabilizeSystem(JSON.parse(JSON.stringify(x))));
+    const replace=!!p&&(p.exportType==='complete-workspace-backup'||/^EACE_COMPLETE_WORKSPACE_EXPORT/.test(String(p.schema||'')));
+    if(replace){
+      WORKSPACE.systems=normalized;st.systems=normalized;
+      const settings=p.settings||p.preferences;
+      if(settings){
+        st.role=settings.role||st.role;
+        st.defaultLang=settings.documentationLanguage||settings.defaultLang||st.defaultLang;
+        st.defaultStyle=settings.defaultStyle||st.defaultStyle;
+      }
+      const org=p.organisation||(p.workspace&&p.workspace.organisationProfile)||p.organisationProfile;
+      if(org)WORKSPACE.orgProfile=org;
+    }else{const base=(WORKSPACE.systems&&WORKSPACE.systems.length?WORKSPACE.systems:st.systems)||[],ids=new Set(base.map(x=>String(x.id)));normalized.forEach(s=>{if(ids.has(String(s.id)))s.id='sys_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);base.push(s)});WORKSPACE.systems=base;st.systems=base;}WORKSPACE.activeId=(p.workspace&&p.workspace.activeId)||p.activeId||(normalized[0]&&normalized[0].id)||WORKSPACE.activeId;st.activeId=WORKSPACE.activeId;try{if(p.executionCheckpoints)Object.entries(p.executionCheckpoints).forEach(([k,v])=>{if(k.startsWith('eace_exec_v1_'))localStorage.setItem(k,typeof v==='string'?v:JSON.stringify(v))});}catch(_e){};try{saveWorkspace();saveSystems();}catch(_e){};try{renderSystemsTab();}catch(_e){}showToast('Import completed · '+normalized.length+' system(s) · '+normalized.reduce((n,s)=>n+s.generatedOutputs.length,0)+' outputs recovered.','var(--green)');}catch(err){console.error(err);showToast('Import failed: '+String(err.message||err),'var(--red-bright)');}finally{if(e&&e.target)e.target.value='';}};r.onerror=()=>showToast('Import failed: file could not be read.','var(--red-bright)');r.readAsText(f);
 };
 // Non-destructive freeze watchdog: never alters generated content or document formatting.
 let lastBusy=0;const busyKeys=['running','generating','isRunning','isGenerating'];
@@ -53068,9 +53102,63 @@ function canonicalOutputs(sys,scope){
   return arr.sort((a,b)=>rank(a)-rank(b));
 }
 function outputsByPrompt(sys){const g={};PROMPT_ORDER.forEach(p=>g[p]=[]);canonicalOutputs(sys).forEach(o=>{const p=inferPrompt(o);(g[p]||(g[p]=[])).push(o)});return g}
+// jsonPayload is the SOLE canonical single-case export payload builder --
+// exportPrompt's/exportSystem's 'json' branches and centralZip's embedded
+// JSON/manifest all call this exact function, and it is additionally
+// exposed side-effect-free via window.EACEExportService.jsonPayload for
+// deterministic testing (tests/verify_step12_export_payload.py), closing
+// the "closure-scoped, cannot be exercised independently" testability gap
+// without introducing a second, competing builder. Every addition below is
+// additive (new keys only; no existing key renamed, removed or
+// restructured) so existing consumers -- importPortfolio's isSingleCase
+// branch, centralZip, any already-exported file on disk -- keep working
+// unchanged; schemaVersion stays 4 for that reason (nothing here is a
+// breaking change to the existing schema, just previously-omitted fields
+// becoming visible).
 function jsonPayload(sys,scope){
   const all=canonicalOutputs(sys,scope),grouped={};PROMPT_ORDER.forEach(p=>grouped[p]=[]);all.forEach(o=>(grouped[inferPrompt(o)]||(grouped[inferPrompt(o)]=[])).push(o));
-  return {app:'EACE',schemaVersion:4,exportType:scope&&PROMPT_ORDER.includes(scope)?'prompt-regulatory-json':'system-regulatory-json',scope:scope||'complete',exportedAt:new Date().toISOString(),buildInfo:(typeof BUILD_INFO!=='undefined'?{productVersion:BUILD_INFO.productVersion,engineVersion:BUILD_INFO.engineVersion,workspaceSchemaVersion:BUILD_INFO.workspaceSchemaVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId}:null),syntheticCase:sys.isSyntheticCase===true,system:{id:sys.id,name:sys.name,status:sys.status,risk:sys.risk,pillar:sys.pillar,version:(sys.data&&sys.data.sysVersion)||'v1.0',ran:sys.ran||{},data:sys.data||{},profile:sys.profile||{}},completedPrompts:PROMPT_ORDER.filter(p=>grouped[p]&&grouped[p].length),outputCounts:Object.fromEntries(PROMPT_ORDER.map(p=>[p,(grouped[p]||[]).length])),outputsByPrompt:grouped,generatedOutputs:all,masterRegulatoryPackages:sys.masterRegulatoryPackages||{},finalRegulatoryReviews:sys.finalRegulatoryReviews||{},evidence:sys.evidence||[],auditRecords:sys.auditRecords||[],assessments:sys.assessments||[],attachments:sys.attachments||[],exports:sys.exports||[]};
+  // Readiness/unresolved-field state per output -- computed via the
+  // existing, unchanged Step F/H engine functions (extractUnresolvedFields,
+  // computeReadinessState), never re-derived here. Looked up against the
+  // OUTPUTS catalogue entry (not the raw generated-output record, which
+  // lacks the 'cat' field detectArtefactTypes needs) exactly as this
+  // session's own regression scripts do. Best-effort and additive: any
+  // single output's failure here must never break the export itself.
+  const readinessByOutput=all.map(o=>{
+    const pillar=inferPrompt(o)||o.promptId;
+    const catalogueEntry=(typeof OUTPUTS!=='undefined'&&OUTPUTS[pillar])?OUTPUTS[pillar].find(x=>x.code===o.code):null;
+    const text=String(o.content||o.text||o.body||'');
+    const entry={pillar,code:o.code||null};
+    try{
+      if(catalogueEntry&&text&&typeof computeReadinessState==='function'){
+        const r=computeReadinessState(pillar,catalogueEntry,text,{});
+        entry.readinessState=r.ladderState;
+        entry.dimensions=r.dimensions;
+      }
+      if(catalogueEntry&&text&&typeof extractUnresolvedFields==='function'){
+        entry.unresolvedFields=extractUnresolvedFields(pillar,catalogueEntry,text);
+      }
+    }catch(e){entry.error=String(e&&e.message||e)}
+    return entry;
+  });
+  return {app:'EACE',schemaVersion:4,exportType:scope&&PROMPT_ORDER.includes(scope)?'prompt-regulatory-json':'system-regulatory-json',scope:scope||'complete',exportedAt:new Date().toISOString(),buildInfo:(typeof BUILD_INFO!=='undefined'?{productVersion:BUILD_INFO.productVersion,engineVersion:BUILD_INFO.engineVersion,workspaceSchemaVersion:BUILD_INFO.workspaceSchemaVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId}:null),syntheticCase:sys.isSyntheticCase===true,
+    // Organisation Profile snapshot at export time -- workspace-scoped, not
+    // case-scoped, so this is informational context for this export rather
+    // than something importPortfolio's single-case branch re-applies on
+    // import (that would mean one case's re-import silently overwriting
+    // the whole workspace's Organisation Profile, which is not what a
+    // single-case import means -- see the whole-workspace path,
+    // workspacePayload()/importPortfolio's isComplete branch, for the
+    // actual round-trip of the Organisation Profile itself).
+    organisationProfile:(typeof WORKSPACE!=='undefined'&&WORKSPACE&&WORKSPACE.orgProfile)||{},
+    system:{id:sys.id,name:sys.name,status:sys.status,risk:sys.risk,pillar:sys.pillar,version:(sys.data&&sys.data.sysVersion)||'v1.0',ran:sys.ran||{},data:sys.data||{},profile:sys.profile||{},moduleAccess:sys.moduleAccess||{}},
+    // Documentation language and Art. 50 notice language are read here only
+    // for convenient top-level inspection -- they already round-trip via
+    // system.data (copied wholesale by importPortfolio's isSingleCase
+    // branch), this is not a second source of truth for them.
+    languageMetadata:{authLang:(sys.data&&sys.data.authLang)||null,outputLang:(sys.data&&sys.data.outputLang)||null,noticeLanguages:(sys.data&&sys.data.noticeLanguages)||null,ifuLanguages:(sys.data&&sys.data.ifuLanguages)||null,linguisticPolicy:(sys.data&&sys.data.linguisticPolicy)||null},
+    readinessByOutput,
+    completedPrompts:PROMPT_ORDER.filter(p=>grouped[p]&&grouped[p].length),outputCounts:Object.fromEntries(PROMPT_ORDER.map(p=>[p,(grouped[p]||[]).length])),outputsByPrompt:grouped,generatedOutputs:all,masterRegulatoryPackages:sys.masterRegulatoryPackages||{},finalRegulatoryReviews:sys.finalRegulatoryReviews||{},evidence:sys.evidence||[],auditRecords:sys.auditRecords||[],assessments:sys.assessments||[],attachments:sys.attachments||[],exports:sys.exports||[]};
 }
 function saveBlob(blob,name){const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),5000)}
 function saveText(text,mime,name){if(typeof downloadBlob==='function')return downloadBlob(text,mime,name);saveBlob(new Blob([text],{type:mime}),name)}
@@ -53350,7 +53438,21 @@ function outputs(s,scope){
 }
 function signature(s,items,scope,fmt){let n=0;for(const o of items)n+=String(o.content||'').length;return [s.id,scope,fmt,items.length,n,items.map(o=>String(o.code||o.outputId||'')).join(',')].join('|')}
 function trigger(blob,name){if(!(blob instanceof Blob)||blob.size<64)throw new Error('Generated file is empty or invalid.');const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(u);a.remove()},120000);return {name,size:blob.size,type:blob.type}}
-function fullJson(s,items){return {schema:'EACE_CASE_EXPORT_V42',exportedAt:new Date().toISOString(),buildInfo:{productVersion:BUILD_INFO.productVersion,engineVersion:BUILD_INFO.engineVersion,workspaceSchemaVersion:BUILD_INFO.workspaceSchemaVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId},syntheticCase:s.isSyntheticCase===true,system:s,generatedOutputs:items,attachments:s.attachments||[],promptAttachments:s.promptAttachments||{},auditTrail:s.auditTrail||s.audit||[],evidence:s.evidence||s.evidenceItems||[]}}
+// fullJson used to build its own second, thinner JSON shape here (schema:'EACE_CASE_EXPORT_V42',
+// no organisationProfile/languageMetadata/readinessByOutput/completedPrompts breakdown) -- a
+// duplicate competing builder alongside the real canonical one, jsonPayload (see
+// eace-v39-central-export-service), exposed globally as window.EACEExportService.jsonPayload
+// (jsonPayload itself is a bare `function` inside v39's IIFE, not reachable by name from this
+// separate v42 IIFE, hence going through the window property). Delegating here makes this the
+// one source of truth the whole live export surface actually uses -- the "Export JSON" button,
+// the ZIP's embedded case JSON, and EACEExportService.jsonPayload called directly all now
+// return the identical payload for the same system/scope (see tests/verify_step12_export_payload.py
+// Test F). Old EACE_CASE_EXPORT_V42-schema files on disk remain importable unchanged --
+// importPortfolio's single-case branch only requires a `system` object, which both shapes have.
+function fullJson(s,items,scope){
+  if(window.EACEExportService&&typeof EACEExportService.jsonPayload==='function')return EACEExportService.jsonPayload(s,scope||null);
+  return {schema:'EACE_CASE_EXPORT_V42',exportedAt:new Date().toISOString(),buildInfo:{productVersion:BUILD_INFO.productVersion,engineVersion:BUILD_INFO.engineVersion,workspaceSchemaVersion:BUILD_INFO.workspaceSchemaVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId},syntheticCase:s.isSyntheticCase===true,system:s,generatedOutputs:items,attachments:s.attachments||[],promptAttachments:s.promptAttachments||{},auditTrail:s.auditTrail||s.audit||[],evidence:s.evidence||s.evidenceItems||[]};
+}
 async function buildCached(s,items,title,format,scope){
  const key=signature(s,items,scope,format);if(cache.has(key))return cache.get(key);
  await new Promise(r=>setTimeout(r,20));
@@ -53373,7 +53475,7 @@ async function exportOne(s,format,scope){
  const base='EACE-'+slug(s.name)+'-'+tag;
  if(format==='pdf'){toast('Preparing PDF…','var(--gold)');const blob=await buildCached(s,items,title,'pdf',scope);const r=trigger(blob,base+'-'+slug(title)+'.pdf');toast('PDF downloaded ('+Math.max(1,Math.round(r.size/1024))+' KB).','var(--green)');return r}
  if(format==='docx'){toast('Preparing Word document…','var(--gold)');const blob=await buildCached(s,items,title,'docx',scope);const r=trigger(blob,base+'-'+slug(title)+'.docx');toast('Word document downloaded.','var(--green)');return r}
- if(format==='json'){const blob=new Blob([JSON.stringify(fullJson(s,items),null,2)],{type:'application/json'});return trigger(blob,base+'-complete-case.json')}
+ if(format==='json'){const blob=new Blob([JSON.stringify(fullJson(s,items,scope),null,2)],{type:'application/json'});return trigger(blob,base+'-complete-case.json')}
  if(format==='zip')return exportZip(s,scope,items);
  throw new Error('Unsupported export format: '+format);
 }
@@ -53402,7 +53504,7 @@ async function exportZip(s,scope,items){
    z.folder('Documents/'+p+'/outputs').file(fname,ob,{binary:true,compression:'STORE'});
   }
  }
- z.file('EACE-'+slug(s.name)+'-complete-case.json',JSON.stringify(fullJson(s,items),null,2));
+ z.file('EACE-'+slug(s.name)+'-complete-case.json',JSON.stringify(fullJson(s,items,scope),null,2));
  z.file('manifest.json',JSON.stringify({schema:'EACE_REGULATORY_PACKAGE_V42',buildInfo:{productVersion:BUILD_INFO.productVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId},syntheticCase:s.isSyntheticCase===true,systemId:s.id,systemName:s.name,prompts:ps,outputCount:items.length,generatedAt:new Date().toISOString(),contents:['complete DOCX','one DOCX per prompt','complete JSON','attachments metadata','audit/evidence in JSON']},null,2));
  // Attachments live under Documents/{pillar}/Attachments -- alongside that
  // pillar's own DOCX and outputs folder, in the same tree a reader is
@@ -53536,7 +53638,18 @@ function workspacePayload(){
  try{if(!systems.length&&window.eaceV25Systems&&window.eaceV25Systems.size)systems=Array.from(window.eaceV25Systems.values())}catch(e){}
  const active=systemById();
  let organisation=null,activeSystemId=active&&active.id||null,role=null,documentationLanguage=null;
- try{organisation=(typeof st!=='undefined'&&st&&st.organisation)||(typeof WORKSPACE!=='undefined'&&WORKSPACE&&(WORKSPACE.orgProfile||WORKSPACE.organisation))||window.organisation||null;role=typeof st!=='undefined'&&st&&st.role||null;documentationLanguage=typeof st!=='undefined'&&st&&st.documentationLanguage||null}catch(e){}
+ try{organisation=(typeof st!=='undefined'&&st&&st.organisation)||(typeof WORKSPACE!=='undefined'&&WORKSPACE&&(WORKSPACE.orgProfile||WORKSPACE.organisation))||window.organisation||null;role=typeof st!=='undefined'&&st&&st.role||null;
+  // st.documentationLanguage is never assigned anywhere in the app -- the
+  // Settings dropdown (index.html, "settings-lang" select) writes
+  // st.defaultLang, which is the field buildSystemPrompt's language
+  // directive actually reads. This capture was a dead field read (always
+  // undefined), meaning a whole-workspace export/import round-trip never
+  // actually carried the user's default documentation language even
+  // though importPortfolio's restore path (settings.documentationLanguage
+  // || settings.defaultLang) was already written to accept it under this
+  // same JSON key. Fixed at the read, not the schema -- key name and
+  // shape are unchanged.
+  documentationLanguage=typeof st!=='undefined'&&st&&st.defaultLang||null}catch(e){}
  return {schema:'EACE_COMPLETE_WORKSPACE_EXPORT_V45',schemaVersion:45,exportedAt:new Date().toISOString(),application:{name:'EACE.ai Local-First Platform',version:'v45'},buildInfo:(typeof BUILD_INFO!=='undefined'?{productVersion:BUILD_INFO.productVersion,engineVersion:BUILD_INFO.engineVersion,workspaceSchemaVersion:BUILD_INFO.workspaceSchemaVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId}:null),organisation,activeSystemId,systems,globalAudit:Array.isArray(window.auditLog)?window.auditLog:[],settings:{role,documentationLanguage}};
 }
 console.info('[EACE v45] Canonical active-system export context enabled.');
@@ -53581,7 +53694,17 @@ async function exportCentral(s,format,scope,styleId){
    if(window.__eaceV42&&typeof __eaceV42.exportZip==='function')return __eaceV42.exportZip(s,scope,items);
    throw new Error('ZIP exporter is unavailable.');
   }
-  if(format==='json'){const b=new Blob([JSON.stringify({schema:'EACE_CASE_EXPORT_V44',exportedAt:new Date().toISOString(),buildInfo:(typeof BUILD_INFO!=='undefined'?{productVersion:BUILD_INFO.productVersion,engineVersion:BUILD_INFO.engineVersion,workspaceSchemaVersion:BUILD_INFO.workspaceSchemaVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId}:null),syntheticCase:s.isSyntheticCase===true,system:s,generatedOutputs:items},null,2)],{type:'application/json'});return download(b,'EACE-'+slug(s.name)+'-complete-case.json')}
+  if(format==='json'){
+   // Was a THIRD inline JSON shape here (schema:'EACE_CASE_EXPORT_V44', missing
+   // organisationProfile/languageMetadata/readinessByOutput/evidence/auditRecords
+   // entirely) -- delegates to the one real canonical builder now, same as the
+   // fullJson() fix in eace-v42-export-runtime, so every reachable "export this
+   // system as JSON" UI path returns the identical payload for the same system/scope.
+   const payload=(window.EACEExportService&&typeof EACEExportService.jsonPayload==='function')
+     ?EACEExportService.jsonPayload(s,scope==='complete'?null:scope)
+     :{schema:'EACE_CASE_EXPORT_V44',exportedAt:new Date().toISOString(),buildInfo:(typeof BUILD_INFO!=='undefined'?{productVersion:BUILD_INFO.productVersion,engineVersion:BUILD_INFO.engineVersion,workspaceSchemaVersion:BUILD_INFO.workspaceSchemaVersion,exportPackageVersion:BUILD_INFO.exportPackageVersion,buildId:BUILD_INFO.buildId}:null),syntheticCase:s.isSyntheticCase===true,system:s,generatedOutputs:items};
+   const b=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});return download(b,'EACE-'+slug(s.name)+'-complete-case.json');
+  }
   throw new Error('Unsupported export format: '+format);
  })().catch(e=>{console.error('[EACE v44 export]',e);toast('Export failed: '+(e.message||e),'var(--red-bright)');throw e}).finally(()=>activeJobs.delete(key));activeJobs.set(key,job);return job;
 }

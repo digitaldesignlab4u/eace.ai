@@ -25,6 +25,7 @@ python3 tests/verify_step8_field_propagation.py  # every Master Profile / Organi
 python3 tests/verify_step9_executive_decision_layer.py  # Executive Dashboard's 3 new columns (Readiness State/Operational Result/Artefact Completeness) present for major artefacts, absent for CSV/P1-brief, vocabulary matches READINESS_LADDER/assessArtefactCompleteness exactly
 python3 tests/verify_step10_pdf_wide_table.py  # P0 fix: 13-column table with unique sentinels in every cell, exported to PDF+DOCX, confirms zero silent column/cell loss
 python3 tests/verify_step11_language_neutral_completeness.py  # P1 fix: EN/DE/HR parallel fixtures score materially equivalently; real German Golden Artefact Acceptance fixtures re-checked; Croatian fixture confirms the fallback layer isn't German-only
+python3 tests/verify_step12_export_payload.py  # JSON/package export testability: single-case export (no download), ZIP manifest, round-trip, multilingual round-trip, legacy import, no duplicate JSON builder
 ```
 
 All need Playwright with a Chromium binary available (see
@@ -97,4 +98,27 @@ before any commit touching the Executive Dashboard section of
 `READINESS_LADDER`/`assessArtefactCompleteness` vocabularies — this test
 is the tripwire for prompt-vs-engine vocabulary drift: if either constant
 changes without updating the other, the mismatch is silent to a human
-reader but this test's exact-string check catches it immediately.
+reader but this test's exact-string check catches it immediately. Run
+`verify_step12_export_payload.py` before any commit touching `jsonPayload`,
+`fullJson` (inside `eace-v42-export-runtime`), `exportCentral`'s
+`format==='json'` branch (inside `eace-v44-runtime`), `workspacePayload`, or
+`importPortfolio` — `jsonPayload` (exposed as
+`window.EACEExportService.jsonPayload`) is the one canonical single-case
+export payload builder; this test caught two live duplicates of it
+(`fullJson`'s old inline `EACE_CASE_EXPORT_V42` shape and `exportCentral`'s
+old inline `EACE_CASE_EXPORT_V44` shape) that the actual "Export JSON"
+button and "Export ZIP" button resolved to instead of `jsonPayload`, via
+the same reassignment-shadowing pattern documented above
+(`EACEExportService.exportSystem` gets overwritten in place by a later
+script block). Both now delegate to the real canonical builder. This test
+also caught that `window.importPortfolio` has the same shadowing problem —
+the live, UI-wired assignment (~line 53010) is a *second*, less capable
+`importPortfolio` than the earlier bare `function importPortfolio(e){...}`
+declaration (~line 6009, dead code): it dropped
+`generatedOutputs`/`evidence`/`auditRecords`/`attachments` entirely on a
+single-case re-import (they are top-level payload siblings of `system`,
+not nested inside it) and never restored workspace-level
+`settings`/`organisation` on a whole-workspace re-import at all. A
+regression in any of these functions reintroduces silent data loss on
+export/import with no visible symptom short of this test's round-trip
+checks (Tests C/D/E).
