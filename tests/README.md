@@ -22,6 +22,7 @@ python3 tests/verify_step5_source_governance_and_enrichment.py  # source-status 
 python3 tests/verify_step6_readiness_and_reassessment.py  # extractUnresolvedFields, computeReadinessState (8-state ladder + 6 dimensions), classifyReassessmentDelta (4-class precedence)
 python3 tests/verify_step7_language_propagation.py  # language-exemption clauses on the new closed-vocabulary labels; languageDirective precedes all new prompt sections, incl. a non-English authLang case
 python3 tests/verify_step8_field_propagation.py  # every Master Profile / Organisation Profile field ID actually reaches buildIntakeContext's generation-context output (214/214 system fields, 26/26 org fields, live-tested)
+python3 tests/verify_step9_executive_decision_layer.py  # Executive Dashboard's 3 new columns (Readiness State/Operational Result/Artefact Completeness) present for major artefacts, absent for CSV/P1-brief, vocabulary matches READINESS_LADDER/assessArtefactCompleteness exactly
 ```
 
 All need Playwright with a Chromium binary available (see
@@ -78,4 +79,10 @@ collisions (`sysDesc`/`sysDescription`, `countryDeploy`/
 `nisEntityProvider`, and others) where a user could fill in the "Master
 Profile" tab and see nothing change in a generated document. A regression
 here silently re-orphans user-supplied facts without any error or visible
-symptom short of this test.
+symptom short of this test. Run `verify_step9_executive_decision_layer.py`
+before any commit touching the Executive Dashboard section of
+`structuredArtefactFormat` (inside `buildSystemPrompt`) or the
+`READINESS_LADDER`/`assessArtefactCompleteness` vocabularies — this test
+is the tripwire for prompt-vs-engine vocabulary drift: if either constant
+changes without updating the other, the mismatch is silent to a human
+reader but this test's exact-string check catches it immediately.
