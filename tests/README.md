@@ -18,6 +18,7 @@ python3 tests/verify_step1_contract.py     # operational artefact completeness c
 python3 tests/verify_step2_p0_enrichment.py  # P0 Human Oversight (P2A O08, P2B O09) + FRIA matrix (P2B O06) targeting
 python3 tests/verify_step3_engine_authored_specs.py  # the 8 Step 0 gaps now RESOLVED with real content, incl. all 7 contractual instruments
 python3 tests/verify_step4_completeness_validator.py  # 5-state deterministic completeness classifier, all states + taxonomy consistency
+python3 tests/verify_step5_source_governance_and_enrichment.py  # source-status labels, NB hierarchy, empty-annex rule, Vulnerability column, Step 3B targeting
 ```
 
 All need Playwright with a Chromium binary available (see
