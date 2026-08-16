@@ -20,6 +20,7 @@ python3 tests/verify_step3_engine_authored_specs.py  # the 8 Step 0 gaps now RES
 python3 tests/verify_step4_completeness_validator.py  # 5-state deterministic completeness classifier, all states + taxonomy consistency
 python3 tests/verify_step5_source_governance_and_enrichment.py  # source-status labels, NB hierarchy, empty-annex rule, Vulnerability column, Step 3B targeting
 python3 tests/verify_step6_readiness_and_reassessment.py  # extractUnresolvedFields, computeReadinessState (8-state ladder + 6 dimensions), classifyReassessmentDelta (4-class precedence)
+python3 tests/verify_step7_language_propagation.py  # language-exemption clauses on the new closed-vocabulary labels; languageDirective precedes all new prompt sections, incl. a non-English authLang case
 ```
 
 All need Playwright with a Chromium binary available (see
