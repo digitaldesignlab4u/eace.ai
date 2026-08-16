@@ -6953,8 +6953,34 @@ async function execRun(){
   }
   const registryCheck=await validateOutputRegistry(exec.pillar);
   if(!registryCheck.valid){
-    showToast('OUTPUT REGISTRY INVALID for '+exec.pillar+' — generation disabled.','var(--red-bright)');
-    return;
+    // A genuine engine-integrity defect (a MAPPING_FAILURE, or the
+    // pre-existing determinism-check failure) on one or a few outputs
+    // must block generation of THOSE outputs only — not the whole
+    // pillar's run. Mark exactly the affected output codes 'blocked' (a
+    // terminal state the loop below skips, distinct from 'error'/
+    // 'partial', which pause the run for a user retry — retrying a
+    // MAPPING_FAILURE would not help, the canonical anchor is genuinely
+    // absent) and let every other, correctly-resolved output proceed
+    // normally. Only an empty registry (nothing resolved at all) still
+    // stops the run outright, since there would be nothing left to run.
+    const blockedCodes = new Set([...(registryCheck.registry.mappingFailureOutputs||[]), ...registryCheck.missing, ...registryCheck.invalid]);
+    let blockedAny = false;
+    exec.outputs.forEach(o=>{
+      if(blockedCodes.has(o.code) && o.state!=='complete'){
+        o.state='blocked';
+        o.lastError='CANONICAL SPEC MAPPING FAILURE — this output could not be resolved to a canonical specification (engine-integrity defect, not a content gap). Excluded from this run; the rest of the package is unaffected.';
+        blockedAny=true;
+      }
+    });
+    if(Object.keys(registryCheck.registry.outputs).length===0){
+      showToast('OUTPUT REGISTRY INVALID for '+exec.pillar+' — no outputs resolved, generation disabled.','var(--red-bright)');
+      return;
+    }
+    if(blockedAny){
+      showToast(blockedCodes.size+' output(s) blocked by a canonical-spec mapping failure — package will be PARTIALLY INCOMPLETE. See Evidence/Audit for details.','var(--amber-bright, orange)');
+      try{ logAudit('engine-integrity', 'Run started with '+blockedCodes.size+' output(s) BLOCKED by mapping failure: '+[...blockedCodes].join(', '), exec.pillar); }catch(e){}
+      saveExecState();
+    }
   }
 
   // Stable legacy execution model: strictly sequential, one output at a time,
@@ -6962,7 +6988,12 @@ async function execRun(){
   while(true){
     if(exec.aborted) return;
     if(exec.paused){ updatePauseBtn(true); return; }
-    const idx=exec.outputs.findIndex(o=>o.state!=='complete');
+    // 'blocked' outputs (a MAPPING_FAILURE excluded above) are a terminal
+    // state like 'complete' for the purpose of this loop — never selected
+    // as the current item, never retried (retrying would not resolve a
+    // genuinely absent canonical anchor). Everything else in the pillar
+    // still runs to completion around them.
+    const idx=exec.outputs.findIndex(o=>o.state!=='complete' && o.state!=='blocked');
     if(idx<0) break;
     const out=exec.outputs[idx];
     if(out.state==='error' || out.state==='partial'){
@@ -7616,14 +7647,42 @@ const OUTPUT_CANONICAL_ANCHORS = Object.freeze({
 });
 // canonicalSpecStatus registry, queryable by Step 4's completeness validator
 // and by anything that needs to know a P2A/P2B output's mapping health
-// without re-running extraction: MAPPED (anchor resolved) / NO_DEDICATED_
-// SECTION (declared gap, catalogue output with no matching canonical prose
-// — see the Step 0 audit) / MISSING (an anchor was expected but could not
-// be resolved at runtime — see CANONICAL_SPEC_MAPPING_FAILURES) /
-// PENDING_VERIFICATION (declared, not yet resolved this session) /
-// UNCLASSIFIED (pillar/code outside OUTPUT_CANONICAL_ANCHORS — P1/P3/P4,
-// or any future P2A/P2B code not yet added to the map — legacy fuzzy
-// search still applies here, unaffected by this safeguard).
+// without re-running extraction. Three states, deliberately NOT treated as
+// equivalent (correction applied after the first cut of this safeguard
+// conflated them):
+//   RESOLVED             — a real canonical section exists and was found.
+//                           Normal full generation.
+//   MAPPING_FAILURE       — a dedicated canonical section IS expected (a
+//                           non-null anchor is declared) but could not be
+//                           resolved at runtime. This is an ENGINE DEFECT,
+//                           not a content gap — see CANONICAL_SPEC_
+//                           MAPPING_FAILURES. Blocks generation of THAT
+//                           OUTPUT ONLY (buildOutputRegistry below catches
+//                           this per-output so one failure cannot take
+//                           down the rest of the pillar's registry); never
+//                           silently falls back to the fragile fuzzy
+//                           search that caused the original Step 0 defect.
+//   NO_DEDICATED_SECTION  — the catalogue intentionally/currently has no
+//                           canonical section for this output yet (the 8
+//                           gaps the Step 0 audit found). This is NOT an
+//                           engine failure and must NOT block generation
+//                           of the rest of the package. It also must NOT
+//                           be treated as licence for the model to invent
+//                           the missing methodology — see the fallback
+//                           text below, which explicitly instructs the
+//                           model to produce a short status record and
+//                           stop, not draft a substantive artefact. Step 3
+//                           resolves these one at a time by authoring and
+//                           validating a real canonical specification,
+//                           after which the status becomes RESOLVED.
+// Plus two bookkeeping states outside the three above:
+//   PENDING_VERIFICATION  — declared with a real anchor, not yet resolved
+//                           this session (transient, becomes RESOLVED or
+//                           MAPPING_FAILURE on first extraction attempt).
+//   UNCLASSIFIED           — pillar/code outside OUTPUT_CANONICAL_ANCHORS
+//                           (P1/P3/P4, or any future P2A/P2B code not yet
+//                           added to the map) — legacy fuzzy search still
+//                           applies here, unaffected by this safeguard.
 const CANONICAL_SPEC_STATUS = {};
 (function initCanonicalSpecStatus(){
   for(const p of Object.keys(OUTPUT_CANONICAL_ANCHORS)){
@@ -7639,8 +7698,10 @@ function getCanonicalSpecStatus(pillar, code){
 // (see extractCanonicalOutputBlock below). Expected to stay empty against a
 // canonical text matching the anchors above; a non-empty array here means
 // the canonical prompt text was regenerated/edited in a way that broke a
-// declared P2A/P2B anchor and generation was blocked rather than silently
-// degraded to the pre-Step-0 front-matter mismatch.
+// declared P2A/P2B anchor and generation of that specific output was
+// blocked rather than silently degraded to the pre-Step-0 front-matter
+// mismatch. A non-empty array does NOT mean the whole package failed —
+// see buildOutputRegistry's per-output try/catch below.
 const CANONICAL_SPEC_MAPPING_FAILURES = [];
 function extractCanonicalOutputBlock(pillar, out){
   // Some P1 outputs (the two Family A deep-dive appendices) are their own
@@ -7657,8 +7718,18 @@ function extractCanonicalOutputBlock(pillar, out){
   if(anchorMap && Object.prototype.hasOwnProperty.call(anchorMap, out.code)){
     const anchorNum = anchorMap[out.code];
     if(anchorNum == null){
+      // Legitimate, non-blocking state: the catalogue contains this output
+      // but no dedicated canonical methodology has been authored for it
+      // yet (Step 0 audit finding). This must NOT read as an invitation
+      // for the model to invent the missing methodology from the title
+      // and legal-basis fields alone — that would make the model, not the
+      // engine, the author of regulatory methodology. The text below
+      // explicitly instructs a short status record and nothing more; Step
+      // 3 resolves each of these by authoring and validating a real
+      // canonical specification, after which OUTPUT_CANONICAL_ANCHORS
+      // gets a real anchor number and this branch stops applying.
       CANONICAL_SPEC_STATUS[pillar+':'+out.code] = 'NO_DEDICATED_SECTION';
-      return `[NO DEDICATED CANONICAL SECTION FOUND for this output — verified via the Step 0 canonical-mapping audit; no per-output section exists in the canonical prompt text for this catalogue entry.]\nOutput: ${out.title}\nLegal basis: ${out.article||'—'}\nCategory: ${out.cat||'—'}\nGenerate this output to the same rigour as all other outputs in this engine, applying the referenced legal basis and any cross-cutting requirements described elsewhere in the canonical prompt.`;
+      return `CANONICAL SPECIFICATION STATUS: No dedicated canonical specification is currently defined for this output.\n\nOutput: ${out.title}\nLegal basis (catalogue field, not a derived legal position): ${out.article||'—'}\nCategory: ${out.cat||'—'}\n\nDo NOT draft the substantive artefact for this output — no contractual clauses, procedural steps, populated matrix, register rows, or notice text. The operational methodology for this output has not yet been defined in the canonical engine; inventing it here would make the model, not the engine, the author of regulatory methodology.\n\nProduce only a controlled explanatory record with these elements, and nothing beyond them:\n1. State plainly that no dedicated canonical specification exists for this output yet, and that substantive artefact generation is intentionally not performed as a result.\n2. Restate this output's declared purpose and legal basis from the fields above only — do not expand or interpret them into new legal analysis.\n3. List, only where already established elsewhere in this system's profile or in another already-generated output in this package, any case facts or evidence already available that are relevant to this output's eventual completion — cite the source output or field rather than restating or re-deriving it.\n4. State what is required before this output can be completed: a canonical specification must be authored and validated for it. Do not propose or imply a specific methodology yourself.\nKeep this record short — it is a status record, not a placeholder attempt at the real artefact.`;
     }
     const nn = String(anchorNum).padStart(2,'0');
     const anchorHit = full.indexOf(`\nOUTPUT ${nn}  ·`);
@@ -7670,15 +7741,19 @@ function extractCanonicalOutputBlock(pillar, out){
         const n = full.indexOf(p, start + 40);
         if(n > start && n < end) end = n;
       }
-      CANONICAL_SPEC_STATUS[pillar+':'+out.code] = 'MAPPED';
+      CANONICAL_SPEC_STATUS[pillar+':'+out.code] = 'RESOLVED';
       return full.slice(start, end);
     }
     // Anchor declared for this output but not found in the live canonical
     // text (e.g. the canonical prompt was regenerated with a different
-    // header format). This output is EXPECTED to have a dedicated
+    // header format). This output IS expected to have a dedicated
     // canonical section — silently falling through to the legacy fuzzy
     // search would re-introduce the exact front-matter-status-board
-    // mismatch Step 0 fixed. Block instead of degrading silently.
+    // mismatch Step 0 fixed. This is a genuine engine-integrity defect,
+    // distinct from the legitimate NO_DEDICATED_SECTION state above:
+    // block THIS OUTPUT only (buildOutputRegistry's per-output try/catch
+    // keeps the rest of the pillar's registry building normally) rather
+    // than degrading silently.
     const failureRecord = {
       pillar, outputCode: out.code, expectedAnchor: 'OUTPUT '+nn,
       canonicalPromptVersion: (CANONICAL_PROMPTS[pillar]||{}).version || 'unknown',
@@ -7687,7 +7762,7 @@ function extractCanonicalOutputBlock(pillar, out){
       ts: new Date().toISOString(),
     };
     CANONICAL_SPEC_MAPPING_FAILURES.push(failureRecord);
-    CANONICAL_SPEC_STATUS[pillar+':'+out.code] = 'MISSING';
+    CANONICAL_SPEC_STATUS[pillar+':'+out.code] = 'MAPPING_FAILURE';
     try{ logAudit('engine-integrity', 'CANONICAL SPEC MAPPING FAILURE — EXECUTION BLOCKED — '+pillar+'/'+out.code, pillar); }catch(e){}
     throw new Error('CANONICAL SPEC MAPPING FAILURE — EXECUTION BLOCKED\n'+JSON.stringify(failureRecord, null, 2));
   }
@@ -7782,9 +7857,25 @@ function buildOutputRegistry(pillar){
   const docs = (function(){ const saved=st.pillar; st.pillar=pillar; const d=getOutputDocs(); st.pillar=saved; return d; })();
   const outputs = {};
   const invalid = [];
+  const mappingFailureOutputs = [];
   docs.forEach(d=>{
-    const spec = extractCanonicalOutputBlock(pillar, d);
-    const spec2 = extractCanonicalOutputBlock(pillar, d); // determinism check only — see note above
+    // A MAPPING_FAILURE (extractCanonicalOutputBlock throwing — see that
+    // function) must block only THIS output, not the whole pillar's
+    // registry: without this try/catch, one uncaught throw inside
+    // Array.forEach's callback aborts the entire loop, silently dropping
+    // every output after the failing one from the registry too. Caught
+    // here, recorded, and skipped — the rest of the pillar still builds
+    // and generates normally. A legitimate NO_DEDICATED_SECTION never
+    // throws (extractCanonicalOutputBlock returns a status string for
+    // it), so it is unaffected by this catch and registers normally below.
+    let spec, spec2;
+    try{
+      spec = extractCanonicalOutputBlock(pillar, d);
+      spec2 = extractCanonicalOutputBlock(pillar, d); // determinism check only — see note above
+    }catch(e){
+      mappingFailureOutputs.push(d.code);
+      return;
+    }
     if(!spec || spec !== spec2){ invalid.push(d.code); return; }
     outputs[d.code] = Object.freeze({
       code: d.code, title: d.title, article: d.article||'',
@@ -7796,11 +7887,16 @@ function buildOutputRegistry(pillar){
     outputs, // not frozen yet — computeRegistryHashes() fills in contentHash below
     builtAt: new Date().toISOString(),
     invalidOutputs: invalid,
+    mappingFailureOutputs, // output codes blocked by a genuine MAPPING_FAILURE this build
+    packageStatus: mappingFailureOutputs.length ? 'PARTIALLY_INCOMPLETE — ENGINE INTEGRITY ISSUE' : 'COMPLETE',
     hashesComputed: false,
   };
   _outputRegistryCache[pillar] = registry;
   if(invalid.length){
     console.error('OUTPUT_REGISTRY: extraction failed or non-deterministic for', pillar, invalid);
+  }
+  if(mappingFailureOutputs.length){
+    console.error('OUTPUT_REGISTRY: CANONICAL SPEC MAPPING FAILURE — blocked outputs (rest of pillar unaffected):', pillar, mappingFailureOutputs);
   }
   return registry;
 }

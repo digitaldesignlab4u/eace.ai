@@ -6,8 +6,10 @@ with that output's real "OUTPUT NN  ·" canonical header (not a fragment of
 the front-matter status-board table, which is what every output used to
 silently resolve to before this fix — see the audit finding in the code
 comment above OUTPUT_CANONICAL_ANCHORS). For every output with a `null`
-entry (no dedicated canonical section exists), it must return the graceful
-"[NO DEDICATED CANONICAL SECTION FOUND" fallback, not a spurious match.
+entry (no dedicated canonical section exists), it must return the
+non-fabricating "CANONICAL SPECIFICATION STATUS" status record (see
+verify_mapping_safeguard.py for the full three-state contract), not a
+spurious match.
 
 This is a live-engine check, not a static read of the source — per
 CLAUDE.md's documented discipline on this file, reading the source is not
@@ -69,8 +71,8 @@ def main():
                 )
                 checked += 1
                 if expected_num is None:
-                    if "[NO DEDICATED CANONICAL SECTION FOUND" not in result:
-                        fails.append(f"{pillar}/{code}: expected graceful fallback, got: {result[:80]!r}")
+                    if "CANONICAL SPECIFICATION STATUS" not in result or "No dedicated canonical specification is currently defined" not in result:
+                        fails.append(f"{pillar}/{code}: expected non-fabricating status record, got: {result[:80]!r}")
                 else:
                     expected_header = f"OUTPUT {expected_num:02d}  ·"
                     if not result.startswith(expected_header) and not result.lstrip().startswith(expected_header):

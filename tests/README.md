@@ -33,8 +33,14 @@ touching BUILD_INFO, `isSyntheticCase`, or the export pipeline
 `buildOutputRegistry` — these are the P2A/P2B canonical-spec routing layer
 documented in the Step 0 audit finding (see git log), and a regression
 here silently degrades every downstream P2A/P2B output back to the
-front-matter-status-board mismatch that fix corrected. Run
-`verify_step1_contract.py` before any commit touching `buildSystemPrompt`
-or the artefact-type detection heuristic inside it — confirms the
-completeness contract stays scoped to P2A/P2B/P3/P4 non-CSV outputs and
-never leaks into P1 or a machine-readable export.
+front-matter-status-board mismatch that fix corrected. Note the three-state
+contract `verify_mapping_safeguard.py` checks — RESOLVED /
+MAPPING_FAILURE / NO_DEDICATED_SECTION are NOT interchangeable:
+MAPPING_FAILURE blocks generation of that one output only (never the rest
+of the pillar's registry — see its "isolation" check); NO_DEDICATED_SECTION
+never blocks anything and must never read as licence for the model to
+invent the missing methodology. Run `verify_step1_contract.py` before any
+commit touching `buildSystemPrompt` or the artefact-type detection
+heuristic inside it — confirms the completeness contract stays scoped to
+P2A/P2B/P3/P4 non-CSV outputs and never leaks into P1 or a machine-readable
+export.

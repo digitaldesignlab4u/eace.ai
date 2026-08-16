@@ -1,23 +1,38 @@
 """
-Verifies the CANONICAL SPEC MAPPING FAILURE safeguard added on top of the
-Step 0 fix (extractCanonicalOutputBlock, index.html): for a P2A/P2B output
-with a declared (non-null) canonical anchor, failing to resolve that anchor
-at runtime must be a BLOCKING error (thrown, recorded in
-CANONICAL_SPEC_MAPPING_FAILURES, status set to MISSING) rather than a
-silent fall-through to the old fuzzy candidate search — that fall-through
-is exactly what caused the Step 0 mismatch in the first place, so it must
-never happen again for a declared anchor.
+Verifies the three-state CANONICAL SPEC MAPPING FAILURE safeguard
+(extractCanonicalOutputBlock / buildOutputRegistry / execRun, index.html).
 
-Checks two things live in a headless browser:
-1. The healthy path: a real anchor (P2A O03) resolves and is marked
-   MAPPED; a declared no-dedicated-section gap (P2A O25) returns the
-   graceful fallback and is marked NO_DEDICATED_SECTION; no failures are
-   recorded against the real, unmodified canonical text.
-2. The failure path: with the P2A O03 anchor header temporarily corrupted
-   (via a monkey-patched getCanonicalFullText wrapper, not by touching the
-   frozen OUTPUT_CANONICAL_ANCHORS map), extraction must throw with the
-   "CANONICAL SPEC MAPPING FAILURE — EXECUTION BLOCKED" message, record one
-   failure with the right pillar/code, and set status to MISSING.
+Corrected design (per explicit follow-up instruction after the first cut of
+this safeguard conflated two different conditions):
+  RESOLVED             — real canonical section found. Normal generation.
+  MAPPING_FAILURE      — a dedicated canonical section IS expected (a
+                          non-null anchor declared) but could not be
+                          resolved at runtime. Genuine engine defect.
+                          Blocks GENERATION OF THAT OUTPUT ONLY — never the
+                          whole pillar's registry or run.
+  NO_DEDICATED_SECTION — the catalogue intentionally has no canonical
+                          section for this output yet (the 8 Step-0-audit
+                          gaps). NOT an engine failure, does NOT block
+                          anything, and must NOT read as licence for the
+                          model to invent the missing methodology — the
+                          fallback text must explicitly forbid drafting a
+                          substantive artefact and require a short status
+                          record instead.
+
+Checks, live in a headless browser:
+1. Healthy path: a real anchor (P2A O03) resolves to RESOLVED; a declared
+   gap (P2A O25) returns the non-fabricating status-record fallback and is
+   marked NO_DEDICATED_SECTION; zero failures recorded against the real,
+   unmodified canonical text.
+2. Failure path: with the P2A O03 anchor header temporarily corrupted
+   (monkey-patched getCanonicalFullText, not the frozen anchor map),
+   extraction throws "CANONICAL SPEC MAPPING FAILURE — EXECUTION BLOCKED",
+   records one failure, sets status MAPPING_FAILURE.
+3. Isolation: with only P2A O03's anchor corrupted, buildOutputRegistry('P2A')
+   still successfully registers every OTHER P2A output — O03 alone is
+   excluded, registry.mappingFailureOutputs contains exactly ['O03'], and
+   registry.packageStatus reports PARTIALLY_INCOMPLETE — confirming one
+   broken mapping cannot take down the rest of the pillar's outputs.
 
 Usage:
     python3 -m http.server 8899 &
@@ -40,38 +55,29 @@ with sync_playwright() as p:
         page.click("text=ENTER WORKSPACE", timeout=3000)
         page.wait_for_timeout(1000)
 
-    # 1. Real anchors should end up MAPPED after resolution, gaps NO_DEDICATED_SECTION.
+    # 1. Real anchors should resolve RESOLVED; declared gaps NO_DEDICATED_SECTION
+    #    with a fallback that explicitly forbids fabricating the artefact.
     r1 = page.evaluate("""() => {
         extractCanonicalOutputBlock('P2A', OUTPUTS.P2A.find(o=>o.code==='O03'));
         return {
-          mapped: getCanonicalSpecStatus('P2A','O03'),
+          resolved: getCanonicalSpecStatus('P2A','O03'),
           gap: getCanonicalSpecStatus('P2A','O25'),
-          gapReturnedText: extractCanonicalOutputBlock('P2A', OUTPUTS.P2A.find(o=>o.code==='O25')).slice(0,60),
+          gapReturnedText: extractCanonicalOutputBlock('P2A', OUTPUTS.P2A.find(o=>o.code==='O25')),
           failuresSoFar: CANONICAL_SPEC_MAPPING_FAILURES.length,
         };
     }""")
-    print("Real-anchor status check:", r1)
-    assert r1["mapped"] == "MAPPED", r1
+    print("Real-anchor / declared-gap status check:", {k: (v[:80] + '...' if isinstance(v, str) and len(v) > 80 else v) for k, v in r1.items()})
+    assert r1["resolved"] == "RESOLVED", r1
     assert r1["gap"] == "NO_DEDICATED_SECTION", r1
-    assert "NO DEDICATED CANONICAL SECTION FOUND" in r1["gapReturnedText"], r1
+    assert "No dedicated canonical specification is currently defined" in r1["gapReturnedText"], r1
+    assert "Do NOT draft the substantive artefact" in r1["gapReturnedText"], r1
+    assert "Generate this output to the same rigour" not in r1["gapReturnedText"], "fallback must not invite fabrication: " + r1["gapReturnedText"]
     assert r1["failuresSoFar"] == 0, "no real anchor should be broken right now"
 
     # 2. Simulate a broken anchor (declared anchor whose header can't be found)
-    #    by calling the function against a fabricated pillar name that reuses
-    #    the P2A canonical text but is NOT in OUTPUT_CANONICAL_ANCHORS, using
-    #    a monkey-patched temporary anchor map entry via a non-frozen probe.
-    #    Since OUTPUT_CANONICAL_ANCHORS is Object.freeze()'d (by design, so
-    #    production code can't tamper with it), we instead unit-test the
-    #    exact failure branch by calling extractCanonicalOutputBlock with an
-    #    out.code that IS declared (O03) but temporarily feeding it a
-    #    canonical text with that header removed, via a throwaway pillar
-    #    entry added to CANONICAL_PROMPTS at runtime (test-only mutation of
-    #    a page-global, not of the frozen anchor map).
+    #    via a monkey-patched getCanonicalFullText wrapper (test-only mutation
+    #    of a page-global, not of the frozen OUTPUT_CANONICAL_ANCHORS map).
     r2 = page.evaluate("""() => {
-        // Register a fake pillar 'P2A' clone whose canonical text has the
-        // OUTPUT 03 header text corrupted, then clear the cache so
-        // getCanonicalFullText re-decodes lazily... simplest: monkey-patch
-        // getCanonicalFullText itself for this one call via a wrapper.
         const realGetFull = getCanonicalFullText;
         window.getCanonicalFullText = function(pillar){
           const t = realGetFull(pillar);
@@ -94,9 +100,37 @@ with sync_playwright() as p:
     print("Simulated broken-anchor check:", r2)
     assert r2["threw"] is True, r2
     assert "CANONICAL SPEC MAPPING FAILURE — EXECUTION BLOCKED" in r2["msg"], r2
-    assert r2["status"] == "MISSING", r2
+    assert r2["status"] == "MAPPING_FAILURE", r2
     assert r2["failures"] == 1, r2
     assert r2["lastFailure"]["pillar"] == "P2A" and r2["lastFailure"]["outputCode"] == "O03", r2
+
+    # 3. Isolation: buildOutputRegistry('P2A') with only O03 broken must still
+    #    register every other P2A output; only O03 is excluded/flagged.
+    r3 = page.evaluate("""() => {
+        const realGetFull = getCanonicalFullText;
+        window.getCanonicalFullText = function(pillar){
+          const t = realGetFull(pillar);
+          return pillar==='P2A' ? t.replace('\\nOUTPUT 03  ·', '\\nOUTPUT ZZ  ·') : t;
+        };
+        delete _outputRegistryCache['P2A']; // force rebuild against corrupted text
+        const registry = buildOutputRegistry('P2A');
+        window.getCanonicalFullText = realGetFull;
+        delete _outputRegistryCache['P2A']; // discard corrupted registry, don't leak into later real usage
+        return {
+          mappingFailureOutputs: registry.mappingFailureOutputs,
+          packageStatus: registry.packageStatus,
+          hasO03: !!registry.outputs['O03'],
+          hasO01: !!registry.outputs['O01'],
+          hasO11: !!registry.outputs['O11'],
+          totalResolved: Object.keys(registry.outputs).length,
+        };
+    }""")
+    print("Registry isolation check:", r3)
+    assert r3["mappingFailureOutputs"] == ["O03"], r3
+    assert r3["packageStatus"] == "PARTIALLY_INCOMPLETE — ENGINE INTEGRITY ISSUE", r3
+    assert r3["hasO03"] is False, r3
+    assert r3["hasO01"] is True and r3["hasO11"] is True, "other P2A outputs must still resolve: " + str(r3)
+    assert r3["totalResolved"] == 32, r3  # 33 P2A entries minus the one blocked (O03)
 
     print("ALL SAFEGUARD CHECKS PASSED")
     print("page errors:", errors)
