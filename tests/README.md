@@ -19,6 +19,7 @@ python3 tests/verify_step2_p0_enrichment.py  # P0 Human Oversight (P2A O08, P2B 
 python3 tests/verify_step3_engine_authored_specs.py  # the 8 Step 0 gaps now RESOLVED with real content, incl. all 7 contractual instruments
 python3 tests/verify_step4_completeness_validator.py  # 5-state deterministic completeness classifier, all states + taxonomy consistency
 python3 tests/verify_step5_source_governance_and_enrichment.py  # source-status labels, NB hierarchy, empty-annex rule, Vulnerability column, Step 3B targeting
+python3 tests/verify_step6_readiness_and_reassessment.py  # extractUnresolvedFields, computeReadinessState (8-state ladder + 6 dimensions), classifyReassessmentDelta (4-class precedence)
 ```
 
 All need Playwright with a Chromium binary available (see
@@ -46,4 +47,15 @@ invent the missing methodology. Run `verify_step1_contract.py` before any
 commit touching `buildSystemPrompt` or the artefact-type detection
 heuristic inside it — confirms the completeness contract stays scoped to
 P2A/P2B/P3/P4 non-CSV outputs and never leaks into P1 or a machine-readable
-export.
+export. Run `verify_step6_readiness_and_reassessment.py` before any commit
+touching `extractUnresolvedFields`, `computeReadinessState`, or
+`classifyReassessmentDelta` — these are pure/deterministic functions (no
+generation, no API cost) built on top of Step 4's
+`assessArtefactCompleteness`; the test confirms `ARTEFACT_STATUS` inside
+the readiness ladder never drifts from the Step 4 verdict for the same
+text, that external readiness facts (approved/executed/superseded) can
+only ever advance the ladder and that `superseded` is terminal, and that
+the reassessment classifier's 4-class precedence
+(CLASSIFICATION_RELEVANT_CHANGE > MATERIAL_FACT_CHANGE > NEW_EVIDENCE_ONLY
+> DOCUMENT_COMPLETION_ONLY) holds even when multiple signals are present
+in the same delta at once.

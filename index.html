@@ -8326,6 +8326,180 @@ function assessArtefactCompleteness(pillar, out, generatedText){
   return result;
 }
 
+// STEP F (engine side) — UNRESOLVED FIELD EXTRACTION. Deterministic
+// post-generation companion to the maximum-autofill / minimum-placeholder
+// discipline: rather than trusting free narrative, this walks every
+// completion-marker occurrence (the same COMPLETION_MARKERS_RE Step 4
+// already uses) plus the richer `[INPUT REQUIRED: field — reason —
+// expected source — owner]` format, and returns one structured record per
+// unresolved field: {fieldId, artefact, context, reason, expectedSource,
+// owner, readinessImpact}. It does not decide resolution order itself
+// (that is the ten-step Organisation Profile → Master System Profile →
+// ... → deterministic safe derivation order applied upstream, at
+// generation time) — it only inventories what generation was left unable
+// to resolve, for the readiness model and any completion UI to consume.
+// Legacy plain markers carry no structured reason/source/owner and are
+// returned with those fields null rather than fabricated.
+const INPUT_REQUIRED_RE = /\[INPUT REQUIRED:\s*([^\]]+)\]/gi;
+const READINESS_IMPACT_HINT_RE = /BLOCKING FOR PACKAGE READINESS|BLOCKING FOR THIS OUTPUT|NON-BLOCKING\s*[—-]\s*INFORMATIONAL GAP ONLY/i;
+function extractUnresolvedFields(pillar, out, generatedText){
+  const text = String(generatedText||'');
+  const code = (out&&out.code)||null;
+  const fields = [];
+  let n = 0;
+  const lineOf = (idx) => {
+    const start = text.lastIndexOf('\n', idx) + 1;
+    let end = text.indexOf('\n', idx);
+    if(end === -1) end = text.length;
+    return text.slice(start, end).trim();
+  };
+  let m;
+  INPUT_REQUIRED_RE.lastIndex = 0;
+  while((m = INPUT_REQUIRED_RE.exec(text))){
+    const parts = m[1].split(/\s*—\s*/).map(s=>s.trim()).filter(Boolean);
+    n++;
+    const context = lineOf(m.index);
+    const impactHint = (READINESS_IMPACT_HINT_RE.exec(context)||[])[0];
+    fields.push({
+      fieldId: pillar+'/'+code+'#'+n,
+      artefact: code,
+      fieldName: parts[0] || null,
+      context,
+      reason: parts[1] || null,
+      expectedSource: parts[2] || null,
+      owner: parts[3] || null,
+      readinessImpact: impactHint ? impactHint.toUpperCase() : 'BLOCKING FOR THIS OUTPUT',
+    });
+  }
+  const seenLines = new Set(fields.map(f=>f.context));
+  COMPLETION_MARKERS_RE.lastIndex = 0;
+  while((m = COMPLETION_MARKERS_RE.exec(text))){
+    const context = lineOf(m.index);
+    if(seenLines.has(context)) continue; // already captured via INPUT REQUIRED on the same line
+    seenLines.add(context);
+    n++;
+    const impactHint = (READINESS_IMPACT_HINT_RE.exec(context)||[])[0];
+    fields.push({
+      fieldId: pillar+'/'+code+'#'+n,
+      artefact: code,
+      fieldName: m[0].trim(),
+      context,
+      reason: null,
+      expectedSource: null,
+      owner: null,
+      readinessImpact: impactHint ? impactHint.toUpperCase() : 'BLOCKING FOR THIS OUTPUT',
+    });
+  }
+  return fields;
+}
+
+// STEP H — READINESS MODEL. Six independently-tracked dimensions instead
+// of collapsing "no placeholders left" into "compliant" — the explicit
+// anti-pattern this task exists to prevent; 100% of fields filled is not
+// the same claim as legal or conformity readiness. ARTEFACT_STATUS is
+// derived from Step 4's assessArtefactCompleteness verdict rather than
+// reimplemented, so the two can never silently disagree. LEGAL_STATUS,
+// EVIDENCE_STATUS, IMPLEMENTATION_STATUS, CONFORMITY_STATUS and
+// PACKAGE_READINESS are workflow/context facts this function cannot derive
+// from generated text alone; they are accepted via `opts` and degrade to
+// 'NOT ASSESSED' rather than being guessed when omitted. The eight-state
+// ladder mirrors the same discipline: APPROVED / EXECUTED / SUPERSEDED are
+// external facts, never inferred from content, and SUPERSEDED is terminal
+// (it overrides every other signal once set).
+const READINESS_LADDER = Object.freeze([
+  'MISSING','DRAFT','PARTIALLY_POPULATED','STRUCTURALLY_COMPLETE',
+  'READY_FOR_EXPERT_REVIEW','APPROVED','EXECUTED','SUPERSEDED',
+]);
+function computeReadinessState(pillar, out, generatedText, opts){
+  const o = opts || {};
+  const completeness = assessArtefactCompleteness(pillar, out, generatedText);
+  const CONTENT_RUNG = {
+    MISSING: 'MISSING',
+    PRESENT: 'DRAFT',
+    PARTIALLY_POPULATED: 'PARTIALLY_POPULATED',
+    REQUIRES_INTERNAL_COMPLETION: 'PARTIALLY_POPULATED',
+    STRUCTURALLY_COMPLETE: 'STRUCTURALLY_COMPLETE',
+  };
+  let rungIdx = READINESS_LADDER.indexOf(CONTENT_RUNG[completeness.status] || 'MISSING');
+  const advance = (state) => { const i = READINESS_LADDER.indexOf(state); if(i > rungIdx) rungIdx = i; };
+  if(o.expertReviewed) advance('READY_FOR_EXPERT_REVIEW');
+  if(o.approved) advance('APPROVED');
+  if(o.executed) advance('EXECUTED');
+  if(o.superseded) rungIdx = READINESS_LADDER.indexOf('SUPERSEDED'); // terminal, overrides all
+  const evidenceStatus = o.evidenceStatus
+    || (completeness.completionMarkersFound.length ? 'EVIDENCE GAPS PRESENT'
+       : (Array.isArray(o.evidenceRefs) && o.evidenceRefs.length ? 'EVIDENCE LINKED' : 'NOT ASSESSED'));
+  return {
+    pillar, code: (out&&out.code)||null,
+    ladderState: READINESS_LADDER[rungIdx],
+    dimensions: {
+      LEGAL_STATUS: o.legalStatus || 'NOT ASSESSED',
+      ARTEFACT_STATUS: completeness.status,
+      EVIDENCE_STATUS: evidenceStatus,
+      IMPLEMENTATION_STATUS: o.implementationStatus || 'NOT ASSESSED',
+      CONFORMITY_STATUS: o.conformityStatus || 'NOT ASSESSED',
+      PACKAGE_READINESS: o.packageReadiness || 'NOT ASSESSED',
+    },
+    completeness,
+  };
+}
+
+// STEP G — DELTA-BASED REASSESSMENT CLASSIFIER. Pure decision function: no
+// system-state I/O, no assumption about a specific "edit" object's shape
+// (no single existing function was found this session that owns a
+// canonical post-generation system-data edit diff, so this deliberately
+// consumes an already-shaped delta rather than guessing at a live data
+// model). Given what changed, returns which of the four reassessment
+// classes applies and the recommended action, in strict precedence order
+// (4 beats 3 beats 2 beats 1 — a classification-relevant change always
+// wins regardless of what else is also true of the delta):
+//   1. DOCUMENT_COMPLETION_ONLY       — previously-unresolved fields were
+//      filled in; no new evidence, no material fact or classification
+//      change. Regenerate only the affected artefact.
+//   2. NEW_EVIDENCE_ONLY              — evidence attached/imported/linked/
+//      replaced, or an approval supplied, without a material fact change.
+//      Update evidence/readiness only; no regeneration required unless a
+//      REQUIRES_INTERNAL_COMPLETION marker is what this evidence resolves.
+//   3. MATERIAL_FACT_CHANGE           — a fact affecting the substance of
+//      one or more artefacts changed, but not a P1 classification gate
+//      fact. Targeted reassessment of only the dependent artefacts.
+//   4. CLASSIFICATION_RELEVANT_CHANGE — a fact affecting the Art. 5 gate,
+//      Annex III routing, risk class, or any other P1-determinative fact
+//      changed. Rerun the P1 gates and mark every dependent P2A/P2B/P3/P4
+//      output stale pending reassessment.
+// In every class, prior approved versions and the audit trail are
+// preserved — this function only classifies, it never deletes or
+// overwrites history.
+function classifyReassessmentDelta(delta){
+  const d = delta || {};
+  const changedFields = Array.isArray(d.changedFields) ? d.changedFields : [];
+  const changedEvidence = Array.isArray(d.changedEvidence) ? d.changedEvidence : [];
+  if(d.classificationRelevantFieldsChanged){
+    return {
+      classification: 'CLASSIFICATION_RELEVANT_CHANGE',
+      action: 'Rerun P1 classification gates (territorial scope, Art. 5 prohibited-practice gate, Annex III, risk class) and mark every dependent P2A/P2B/P3/P4 output STALE pending reassessment. Preserve the prior approved version of every artefact and log the change to the audit trail before regenerating anything.',
+    };
+  }
+  if(d.materialFactChanged){
+    return {
+      classification: 'MATERIAL_FACT_CHANGE',
+      action: 'Run a targeted reassessment of only the artefact(s) that depend on the changed fact(s). Leave unaffected artefacts and their prior approved versions untouched, and log the change to the audit trail.',
+    };
+  }
+  if(changedEvidence.length || d.approvalSupplied){
+    return {
+      classification: 'NEW_EVIDENCE_ONLY',
+      action: 'Update evidence linkage and the readiness model (EVIDENCE_STATUS / CONFORMITY_STATUS as applicable) for the affected artefact(s). No regeneration required unless the artefact currently reads REQUIRES_INTERNAL_COMPLETION for a field this evidence resolves.',
+    };
+  }
+  return {
+    classification: 'DOCUMENT_COMPLETION_ONLY',
+    action: changedFields.length
+      ? 'Regenerate only the affected artefact(s) to fold in the newly-supplied field value(s). No reassessment of classification or other artefacts is required.'
+      : 'No recognised change supplied — nothing to reassess.',
+  };
+}
+
 function buildSystemPrompt(pillar, out){
   pillar = pillar || (exec && exec.pillar) || st.pillar || 'P1';
   const canonical = CANONICAL_PROMPTS[pillar];
