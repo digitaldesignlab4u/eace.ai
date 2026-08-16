@@ -94,11 +94,34 @@ with sync_playwright() as p:
     print("Type-taxonomy consistency check (P2A O25):", consistency)
     if consistency["types"] != consistency["resultTypes"]:
         fails.append(f"detectArtefactTypes and assessArtefactCompleteness disagree on types for P2A/O25: {consistency}")
-    # The engine-authored O25 spec itself is a well-formed CONTRACT-shaped
-    # document (clauses, parties, obligations language) — sanity-check it
-    # scores at least PARTIALLY_POPULATED, not PRESENT/MISSING.
-    if consistency["status"] not in ("PARTIALLY_POPULATED", "STRUCTURALLY_COMPLETE", "REQUIRES_INTERNAL_COMPLETION"):
-        fails.append(f"P2A/O25's own authored spec text scored unexpectedly low: {consistency}")
+    # NOTE: the engine-authored O25 spec text itself is a *description* of
+    # what to generate (legal basis + "Generate:" instructions), not an
+    # actual executed contract — post language-neutral-completeness
+    # refactor (Task P1, Golden Artefact Acceptance remediation) it is
+    # correctly expected to score lower than a real contract with actual
+    # §-clauses and a signature block, since detection is now structural/
+    # substantive rather than superficial-keyword-based ("clause"/"party"
+    # appearing in prose no longer implies OPERATIVE_CLAUSES/SIGNATURE_
+    # EXECUTION are actually present). A realistic contract fixture is the
+    # correct test of CONTRACT-shape recognition instead.
+    real_contract_text = (
+        "Vertragsinstrument — Auftragsverarbeitungsvereinbarung\n\n"
+        "Zwischen der Partei A (Verantwortlicher) und der Partei B (Auftragsverarbeiter).\n\n"
+        "§1 Gegenstand: Die Verarbeitung personenbezogener Daten gemäß Art. 28(3)(a) DSGVO.\n"
+        "§2 Pflichten des Auftragsverarbeiters: Der Auftragsverarbeiter verpflichtet sich, "
+        "Daten ausschließlich auf dokumentierte Weisung zu verarbeiten.\n"
+        "§3 Änderungsverfahren: Änderungen dieser Vereinbarung bedürfen der Schriftform und "
+        "werden im Versionskontrollregister erfasst.\n\n"
+        "Unterschrift Partei A: ______________ Datum: 2026-09-01\n"
+        "Unterschrift Partei B: ______________ Datum: 2026-09-01\n"
+    )
+    real_contract_result = page.evaluate(
+        "([p, o, t]) => assessArtefactCompleteness(p, o, t)",
+        ["P2A", page.evaluate("() => OUTPUTS.P2A.find(o => o.code === 'O25')"), real_contract_text],
+    )
+    print("Realistic German contract fixture (P2A O25):", real_contract_result)
+    if real_contract_result["status"] not in ("PARTIALLY_POPULATED", "STRUCTURALLY_COMPLETE", "REQUIRES_INTERNAL_COMPLETION"):
+        fails.append(f"Realistic contract-shaped text (with real §-clauses and signature block) scored unexpectedly low: {real_contract_result}")
 
     print(f"\nFAILURES: {len(fails)}")
     for f in fails:

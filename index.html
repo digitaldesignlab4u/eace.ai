@@ -8227,64 +8227,102 @@ function detectArtefactTypes(out){
 //                                 claims to be.
 //   STRUCTURALLY_COMPLETE      — no completion markers, >=80% dimension
 //                                 coverage.
+// P1 FIX (Golden Artefact Acceptance, language-neutral completeness):
+// dimension IDENTIFIERS are canonical, language-neutral English machine
+// tokens (matching the READINESS_LADDER / Fact-Label / badge precedent
+// already established this session) -- but DETECTION no longer depends
+// primarily on English lexical regexes, since that produced confirmed
+// false negatives (dimensionsMissing) against genuinely complete German
+// artefacts in the Golden Artefact Acceptance run: "Eskalationspfad"
+// doesn't match /escalat/i (German spells it with a k), "§1"-style German
+// contract clauses don't match /\bclause\b|\barticle\s*\d/i, "Verarbeitung"
+// doesn't match /\bprocessing\b/i, etc.
+//
+// Two-tier detection, see detectCanonicalDimension below:
+//   Tier 1 (primary): STRUCTURAL_DIMENSION_DETECTORS -- markdown/numeric
+//     structure and the fixed-English anchor tokens this app already
+//     guarantees stay in English regardless of documentation language
+//     (Fact-Label Vocabulary tags, Article/Annex/§ citation numbering,
+//     numbered-step markers). These need no per-language work at all.
+//   Tier 2 (fallback, lexical, multilingual): consulted only when Tier 1
+//     does not fire. Extend LEXICAL_DIMENSION_FALLBACK with more
+//     languages as needed -- no other code changes required. Currently
+//     covers English (backwards-compatible with the pre-refactor regexes)
+//     plus German and Croatian, the languages this session's multilingual
+//     regression exercises (tests/verify_step10_language_neutral_completeness.py).
+const CANONICAL_DIMENSIONS = Object.freeze([
+  'PURPOSE_SCOPE','LEGAL_BASIS','ROLES_RESPONSIBILITIES','PROCEDURE',
+  'CONTROLS','ESCALATION','EVIDENCE','REVIEW','APPROVAL','RETENTION',
+  'CHANGE_CONTROL','RISK','REMEDIATION','OPERATIVE_CLAUSES','SIGNATURE_EXECUTION',
+]);
+const STRUCTURAL_DIMENSION_DETECTORS = Object.freeze({
+  LEGAL_BASIS:         /\bArt(?:icle|\.)?\s*\d+|§\s*\d+|\bAnnex\s+[IVXLC]+\b|\bAnhang\s+[IVXLC]+\b/i,
+  // Deliberately not anchored to "Step" or line-start: a numbered-step
+  // marker keeps its digit+punctuation form regardless of the preceding
+  // word in any language ("Step 1.", "Schritt 1.", "Korak 1.", "› 1."),
+  // so matching the number pattern itself is the language-neutral signal
+  // -- anchoring to the English word "Step" (an earlier draft of this fix
+  // did exactly that) silently re-introduced an English-only dependency.
+  PROCEDURE:           /\d+[.)]\s|›\s*\d+\.|§\s*\d+/mi,
+  // Only the tags that represent a genuine evidence citation count as
+  // EVIDENCE present -- [NOT PROVIDED] means the opposite (a fact this
+  // artefact needed was NOT sourced) and must never inflate this
+  // dimension merely because the vocabulary word appears.
+  EVIDENCE:            /\[(USER DECLARED|DOCUMENT VERIFIED|OFFICIAL SOURCE VERIFIED|SYSTEM DERIVED)\]/,
+  OPERATIVE_CLAUSES:   /§\s*\d+|\bArt(?:icle|\.)?\s*\d+\s*\(/i,
+  SIGNATURE_EXECUTION: /_{3,}[\s\S]{0,60}(?:\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{2,4})|(?:\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{2,4})[\s\S]{0,60}_{3,}/,
+  RISK:                /\b[1-5]\s*[×x/–-]\s*[1-5]\b|(?:severity|schwere|ozbiljnost|težina).{0,25}[1-5]|(?:likelihood|wahrscheinlichkeit|vjerojatnost).{0,25}[1-5]/i,
+  CONTROLS:            /(\|[^\n|]+\|[^\n|]+\|)|\[(HIGH-RISK|CONFIRMED|WARNING|ACTION-REQUIRED)\]/,
+});
+const LEXICAL_DIMENSION_FALLBACK = Object.freeze({
+  PURPOSE_SCOPE:          {en:/\bpurpose\b|\bscope\b/i, de:/\bzweck\b|\banwendungsbereich\b|\bgeltungsbereich\b/i, hr:/\bsvrha\b|\bopseg\b|\bpodručj[ae] primjene\b/i},
+  // Prefix-style stems, not whole-word matches: an inflected form
+  // (Croatian "uloge"/"ulogu", the adjective "odgovoran"/"odgovorna") must
+  // still match -- a earlier draft's \buloga\b and \bodgovorn required the
+  // exact dictionary form and silently missed ordinary grammatical
+  // inflection, reproducing the same class of false negative this refactor
+  // exists to fix, just in a new language instead of English.
+  ROLES_RESPONSIBILITIES: {en:/\brole\b|\bowner\b|\bresponsib/i, de:/\brolle\b|\bverantwortlich|\bzuständig/i, hr:/\bulog[aeiu]|\bodgovor/i},
+  CONTROLS:               {en:/\bcontrol\b|\bsafeguard\b|\bmeasure\b/i, de:/\bkontroll|\bmaßnahme\b|\bsicherung\b/i, hr:/\bkontrol|\bmjer[ae]\b/i},
+  // Cover both the noun stem (Eskalation/eskalacija) and the verb stem
+  // (eskalieren/eskalirati) -- German and Croatian verb conjugation
+  // doesn't share a stem with the noun form the way English "escalate"/
+  // "escalation" do, so a noun-only pattern silently missed verb usage
+  // ("... an den Risikoeigentümer eskalieren", "Eskalirati vlasniku...").
+  ESCALATION:             {en:/escalat/i, de:/eskalat|eskalier/i, hr:/eskalacij|eskalira/i},
+  EVIDENCE:               {en:/\bevidence\b|\brecord\b/i, de:/\bnachweis\b|\bbeleg\b|\baufzeichnung\b/i, hr:/\bdokaz\b|\bevidencij/i},
+  REVIEW:                 {en:/\breview\b|\baudit\b/i, de:/\bprüfung\b|\büberprüfung\b|\baudit\b/i, hr:/\bpregled\b|\brevizij\b|\bprovjer/i},
+  APPROVAL:               {en:/\bapprov|sign[- ]?off/i, de:/\bgenehmigung\b|\bfreigabe\b/i, hr:/\bodobrenj/i},
+  RETENTION:              {en:/\bretention\b|\d+\s*year/i, de:/\baufbewahrung\b|\d+\s*jahr/i, hr:/\bčuvanj\b|\d+\s*godin/i},
+  CHANGE_CONTROL:         {en:/version control|change control/i, de:/versionskontrolle|änderungskontrolle/i, hr:/kontrola verzij|kontrola promjen/i},
+  RISK:                   {en:/\brisk\b/i, de:/\brisiko\b/i, hr:/\brizik/i},
+  REMEDIATION:            {en:/\bremed|\bcorrective|\bcapa\b/i, de:/\babhilfe\b|\bkorrektur\b|\bbehebung\b/i, hr:/\botklanjanj|\bkorektivn/i},
+  PROCEDURE:              {en:/step-by-step|\btrigger\b|\bcriteri/i, de:/schritt für schritt|\bauslöser\b|\bkriteri/i, hr:/korak po korak|\bokidač\b|\bkriterij/i},
+});
+function detectCanonicalDimension(dimId, text){
+  const structural = STRUCTURAL_DIMENSION_DETECTORS[dimId];
+  if(structural && structural.test(text)) return true;
+  const lex = LEXICAL_DIMENSION_FALLBACK[dimId];
+  if(!lex) return false;
+  return Object.keys(lex).some(k=>lex[k].test(text));
+}
+// Per artefact-type required canonical dimensions. A type's list may be
+// shorter or longer than its pre-refactor English-label list -- these are
+// now genuine semantic requirements, not a rename of the old labels, per
+// the explicit "do not solve this merely by adding German regexes"
+// instruction; some original labels (e.g. MATRIX's "populated rows",
+// FORM_TEMPLATE's "labelled fields") are structural-only concerns folded
+// into CONTROLS' table-presence detector rather than kept as a separate
+// named dimension with no clear canonical-ID equivalent.
 const ARTEFACT_ANATOMY_DIMENSIONS = Object.freeze({
-  SOP_PROCEDURE: [
-    {label:'purpose/scope', re:/\bpurpose\b|\bscope\b/i},
-    {label:'roles/owner', re:/\brole\b|\bowner\b|\bresponsib/i},
-    {label:'executable steps', re:/\n\s*(step\s*\d|\d+[.)]\s)|step-by-step/i},
-    {label:'triggers/decision criteria', re:/\btrigger\b|\bcriteri/i},
-    {label:'escalation', re:/escalat/i},
-    {label:'evidence/records', re:/\bevidence\b|\brecord/i},
-    {label:'review/approval', re:/\breview\b|\bapprov|sign[- ]?off/i},
-  ],
-  MATRIX: [
-    {label:'defined scales/criteria', re:/\bscale\b|\blikelihood\b|\bseverity\b|\b(low|medium|high)\b/i},
-    {label:'populated rows', re:/(\|[^\n|]+\|[^\n|]+\|)|(\n\s*\d+[.)]\s.+){3,}/},
-    {label:'owner', re:/\bowner\b/i},
-    {label:'decision consequence', re:/escalat|suspend|\bblock|action required/i},
-    {label:'evidence linkage', re:/\bevidence\b/i},
-  ],
-  REGISTER_LOG: [
-    {label:'defined fields', re:/(\|[^\n|]+\|[^\n|]+\|)|\bfield\b/i},
-    {label:'owner', re:/\bowner\b/i},
-    {label:'retention', re:/\bretention\b/i},
-    {label:'access/integrity control', re:/access control|\bintegrity\b/i},
-    {label:'review cadence', re:/\breview\b/i},
-  ],
-  FORM_TEMPLATE: [
-    {label:'labelled fields', re:/\[[^\]]+\]/},
-    {label:'mandatory/optional state', re:/\bmandatory\b|\boptional\b/i},
-    {label:'completion instruction', re:/\bcomplet(e|ed|ion)\b|\bfill\b/i},
-    {label:'approval/sign-off', re:/\bapprov|sign[- ]?off/i},
-  ],
-  POLICY: [
-    {label:'purpose/scope', re:/\bpurpose\b|\bscope\b/i},
-    {label:'principles/rules', re:/\bprincipl|\brule\b/i},
-    {label:'responsibilities', re:/\bresponsib/i},
-    {label:'exceptions', re:/\bexception\b/i},
-    {label:'escalation', re:/escalat/i},
-    {label:'review/approval', re:/\breview\b|\bapprov/i},
-  ],
-  CONTRACT: [
-    {label:'operative clauses', re:/\bclause\b|\barticle\s*\d|\bsection\s*\d/i},
-    {label:'parties/placeholders', re:/\bpart(y|ies)\b|\[[^\]]+\]/i},
-    {label:'obligations', re:/\bshall\b|\bobligation/i},
-    {label:'change/incident/audit terms', re:/\bamend|\bincident|\baudit/i},
-    {label:'execution fields', re:/\bsignatur|sign[- ]?off|\bexecut/i},
-  ],
-  NOTICE: [
-    {label:'deployable notice text', re:/\byou\b|\bthis (system|service|application)\b/i},
-    {label:'timing/placement', re:/\btiming\b|\bplacement\b|\bwhen\b/i},
-    {label:'audience', re:/\buser\b|\baudience\b/i},
-  ],
-  DPIA_FRIA: [
-    {label:'processing/deployment description', re:/\bprocessing\b|\bdeployment\b/i},
-    {label:'necessity/proportionality', re:/\bnecessity\b|\bproportionality\b/i},
-    {label:'risk identification', re:/\brisk\b/i},
-    {label:'safeguards/mitigations', re:/safeguard|mitigat/i},
-    {label:'residual risk', re:/\bresidual\b/i},
-    {label:'sign-off/review', re:/sign[- ]?off|\bapprov|\breview\b/i},
-  ],
+  SOP_PROCEDURE: ['PURPOSE_SCOPE','ROLES_RESPONSIBILITIES','PROCEDURE','ESCALATION','EVIDENCE','APPROVAL'],
+  MATRIX:        ['RISK','ROLES_RESPONSIBILITIES','CONTROLS','EVIDENCE'],
+  REGISTER_LOG:  ['ROLES_RESPONSIBILITIES','RETENTION','CONTROLS','REVIEW'],
+  FORM_TEMPLATE: ['ROLES_RESPONSIBILITIES','PROCEDURE','APPROVAL'],
+  POLICY:        ['PURPOSE_SCOPE','ROLES_RESPONSIBILITIES','CONTROLS','ESCALATION','REVIEW','APPROVAL'],
+  CONTRACT:      ['OPERATIVE_CLAUSES','ROLES_RESPONSIBILITIES','CHANGE_CONTROL','SIGNATURE_EXECUTION'],
+  NOTICE:        ['PURPOSE_SCOPE','ROLES_RESPONSIBILITIES'],
+  DPIA_FRIA:     ['PURPOSE_SCOPE','RISK','CONTROLS','APPROVAL'],
 });
 const COMPLETION_MARKERS_RE = /\[PLACEHOLDER[^\]]*\]|\[ACT\]|\[HASH\s*[—-]\s*ACT\]|\[ENTER VALUE\]|\[ENTER INTERNAL DATA\]|\[FETCH\]|\[AWAITING[^\]]*\]|\[OFFICIAL SOURCE VERIFICATION REQUIRED\]|REQUIRED\s*\/\s*NOT PROVIDED|TO BE COMPLETED|\[YES\/NO\s*[—-]\s*ACT\]/gi;
 function assessArtefactCompleteness(pillar, out, generatedText){
@@ -8310,12 +8348,12 @@ function assessArtefactCompleteness(pillar, out, generatedText){
   const markerMatches = text.match(COMPLETION_MARKERS_RE) || [];
   result.completionMarkersFound = [...new Set(markerMatches.map(m=>m.trim()))];
   const allDims = [];
-  types.forEach(t => (ARTEFACT_ANATOMY_DIMENSIONS[t]||[]).forEach(d => allDims.push({type:t, ...d})));
+  types.forEach(t => (ARTEFACT_ANATOMY_DIMENSIONS[t]||[]).forEach(dimId => allDims.push({type:t, dimId})));
   const seen = new Set();
-  const uniqueDims = allDims.filter(d => { const k=d.type+':'+d.label; if(seen.has(k)) return false; seen.add(k); return true; });
+  const uniqueDims = allDims.filter(d => { const k=d.type+':'+d.dimId; if(seen.has(k)) return false; seen.add(k); return true; });
   for(const d of uniqueDims){
-    const entry = d.type+': '+d.label;
-    if(d.re.test(text)) result.dimensionsFound.push(entry);
+    const entry = d.type+': '+d.dimId;
+    if(detectCanonicalDimension(d.dimId, text)) result.dimensionsFound.push(entry);
     else result.dimensionsMissing.push(entry);
   }
   result.coverage = uniqueDims.length ? Math.round((result.dimensionsFound.length/uniqueDims.length)*100)/100 : 1;
@@ -54080,10 +54118,58 @@ async function buildPdf(system,items,title){
  }
  function list(v,n){const fs=9,lh=12.8,ls=wrap(v,fs,CW-20);need(ls.length*lh+6);font('bold',8,C.gold);d.text(n||'•',L+2,y);for(const line of ls){textLine(line,L+19,y,fs,'normal',C.ink);y+=lh}y+=4}
  function rule(){need(12);d.setDrawColor(...C.line);d.line(L,y,W-R,y);y+=12}
- function table(rows){if(!rows.length)return;const cols=Math.max(...rows.map(r=>r.length)),pad=5,fs=7.1,lh=9.5;let weights=[];for(let c=0;c<cols;c++){let mx=9;for(const r of rows)mx=Math.max(mx,Math.min(58,clean(r[c]||'').length));weights[c]=mx}let sum=weights.reduce((a,b)=>a+b,0),ws=weights.map(v=>CW*v/sum);const min=54;let deficit=0;ws=ws.map(v=>v<min?(deficit+=min-v,min):v);if(deficit){let flex=ws.reduce((a,v)=>a+(v>min?v-min:0),0);ws=ws.map(v=>v>min?v-deficit*(v-min)/Math.max(1,flex):v)}
+ // P0 FIX (Golden Artefact Acceptance, PDF wide-table content loss): the
+ // previous version enforced a 54pt minimum column width but never checked
+ // that cols*min actually fits inside CW, so a wide table (e.g. a
+ // 13-column Fundamental Rights Matrix) silently drew its last columns
+ // past the right margin -- invisible in the rendered PDF, even though the
+ // same content rendered correctly in DOCX (a different renderer entirely).
+ // Fix, in order, never dropping a column or truncating a cell: (1) try
+ // the original width/font -- unchanged output for every table that
+ // already fit, zero regression; (2) one moderate font/min-width squeeze
+ // step; (3) if the table still cannot keep every column at a readable
+ // floor, split it into column-groups stacked vertically, each repeating
+ // column 0 as a row-identity anchor -- every column still appears
+ // exactly once, in full, just not in a single physical block.
+ function fitTableWidths(weights,sum,colMin){
+  let ws=weights.map(v=>CW*v/sum),deficit=0;
+  ws=ws.map(v=>v<colMin?(deficit+=colMin-v,colMin):v);
+  if(deficit){let flex=ws.reduce((a,v)=>a+(v>colMin?v-colMin:0),0);ws=ws.map(v=>v>colMin?v-deficit*(v-colMin)/Math.max(1,flex):v)}
+  const total=ws.reduce((a,b)=>a+b,0);
+  return (total<=CW+0.5 && ws.every(v=>v>=colMin-0.5)) ? ws : null;
+ }
+ function drawTableBlock(rows,ws,fs,cols){
+  const pad=5,lh=9.5;
   const wrapped=(row,head)=>Array.from({length:cols},(_,c)=>wrap(row[c]||'',fs,ws[c]-pad*2,head));
   function draw(w,head){const rh=Math.max(22,Math.max(...w.map(x=>x.length))*lh+pad*2);need(rh);let x=L;for(let c=0;c<cols;c++){d.setFillColor(...(head?C.teal:C.white));d.setDrawColor(...C.line);d.setLineWidth(.35);d.rect(x,y,ws[c],rh,'FD');font(head?'bold':'normal',fs,head?C.white:C.ink);let yy=y+pad+7;for(const line of w[c]){if(head){d.text(line,x+pad,yy)}else{textLine(line,x+pad,yy,fs,'normal',C.ink)}yy+=lh}x+=ws[c]}y+=rh}
-  need(40);const hdr=wrapped(rows[0],true);draw(hdr,true);for(let r=1;r<rows.length;r++){let w=wrapped(rows[r],false);if(y+Math.max(22,Math.max(...w.map(x=>x.length))*lh+pad*2)>H-B){page();draw(hdr,true)}draw(w,false)}y+=9}
+  need(40);const hdr=wrapped(rows[0],true);draw(hdr,true);for(let r=1;r<rows.length;r++){let w=wrapped(rows[r],false);if(y+Math.max(22,Math.max(...w.map(x=>x.length))*lh+pad*2)>H-B){page();draw(hdr,true)}draw(w,false)}y+=9;
+ }
+ function table(rows){
+  if(!rows.length)return;
+  const cols=Math.max(...rows.map(r=>r.length));
+  const weights=[];for(let c=0;c<cols;c++){let mx=9;for(const r of rows)mx=Math.max(mx,Math.min(58,clean(r[c]||'').length));weights[c]=mx}
+  const sum=weights.reduce((a,b)=>a+b,0)||1;
+  const FIT_STEPS=[[7.1,54],[6.6,48]];
+  let fs=null,ws=null;
+  for(const step of FIT_STEPS){const w=fitTableWidths(weights,sum,step[1]);if(w){fs=step[0];ws=w;break}}
+  if(ws){drawTableBlock(rows,ws,fs,cols);return}
+  // No font/min-width combination on the readability floor above keeps
+  // every column on the page -- split into column-groups instead. Column
+  // 0 is treated as the row-identity anchor and repeated in every group.
+  const MIN_COL_W=48,fsFloor=6.6;
+  const anchorW=Math.max(MIN_COL_W,Math.min(CW*0.32,CW*weights[0]/sum));
+  const perGroup=Math.max(1,Math.floor((CW-anchorW)/MIN_COL_W));
+  const otherCols=[];for(let c=1;c<cols;c++)otherCols.push(c);
+  const groups=[];for(let i=0;i<otherCols.length;i+=perGroup)groups.push(otherCols.slice(i,i+perGroup));
+  groups.forEach((g,gi)=>{
+   const idxSet=[0].concat(g);
+   const groupRows=rows.map(r=>idxSet.map(c=>r[c]||''));
+   const groupWeights=idxSet.map(c=>weights[c]);
+   const gw=fitTableWidths(groupWeights,groupWeights.reduce((a,b)=>a+b,0)||1,MIN_COL_W)||groupWeights.map(()=>CW/idxSet.length);
+   if(groups.length>1){need(16);font('bold',7.4,C.muted);d.text('(columns '+(gi+1)+' of '+groups.length+' — row identity in column 1 repeated)',L,y);y+=12}
+   drawTableBlock(groupRows,gw,fsFloor,idxSet.length);
+  });
+ }
  // ── Summary dashboard (deterministic, from generatedOutputs metadata -- no extra AI calls) ──
  const SUMMARY_CODES={P1:'O21',P2A:'O31',P2B:'O22',P4:'UM6'};
  // "Complete" uses the document's own brand teal (not a generic dashboard-software green) so

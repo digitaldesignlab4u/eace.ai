@@ -23,6 +23,8 @@ python3 tests/verify_step6_readiness_and_reassessment.py  # extractUnresolvedFie
 python3 tests/verify_step7_language_propagation.py  # language-exemption clauses on the new closed-vocabulary labels; languageDirective precedes all new prompt sections, incl. a non-English authLang case
 python3 tests/verify_step8_field_propagation.py  # every Master Profile / Organisation Profile field ID actually reaches buildIntakeContext's generation-context output (214/214 system fields, 26/26 org fields, live-tested)
 python3 tests/verify_step9_executive_decision_layer.py  # Executive Dashboard's 3 new columns (Readiness State/Operational Result/Artefact Completeness) present for major artefacts, absent for CSV/P1-brief, vocabulary matches READINESS_LADDER/assessArtefactCompleteness exactly
+python3 tests/verify_step10_pdf_wide_table.py  # P0 fix: 13-column table with unique sentinels in every cell, exported to PDF+DOCX, confirms zero silent column/cell loss
+python3 tests/verify_step11_language_neutral_completeness.py  # P1 fix: EN/DE/HR parallel fixtures score materially equivalently; real German Golden Artefact Acceptance fixtures re-checked; Croatian fixture confirms the fallback layer isn't German-only
 ```
 
 All need Playwright with a Chromium binary available (see
@@ -61,7 +63,17 @@ only ever advance the ladder and that `superseded` is terminal, and that
 the reassessment classifier's 4-class precedence
 (CLASSIFICATION_RELEVANT_CHANGE > MATERIAL_FACT_CHANGE > NEW_EVIDENCE_ONLY
 > DOCUMENT_COMPLETION_ONLY) holds even when multiple signals are present
-in the same delta at once. Run `verify_step8_field_propagation.py` before
+in the same delta at once. Run `verify_step10_pdf_wide_table.py` before any
+commit touching the PDF `table`/`fitTableWidths`/`drawTableBlock` functions
+inside `__eaceV32.buildPdf` — this is the P0 fix for a confirmed defect
+(a 13-column table silently lost its last two columns off the printable
+page); a regression here re-introduces silent PDF content loss with no
+visible symptom short of this test. Run
+`verify_step11_language_neutral_completeness.py` before any commit
+touching `ARTEFACT_ANATOMY_DIMENSIONS`, `STRUCTURAL_DIMENSION_DETECTORS`,
+or `LEXICAL_DIMENSION_FALLBACK` — confirms completeness scoring doesn't
+silently regress into English-only detection for any of the languages
+this test exercises. Run `verify_step8_field_propagation.py` before
 any commit touching `buildIntakeContext`, `ORG_FALLBACK_COMPOSERS`, or
 `applyOrgLiveFallback` — this is the field-propagation regression: it
 enumerates every field ID from `MASTER_GROUPS`/`MASTER_GROUPS_EXT2` (the
