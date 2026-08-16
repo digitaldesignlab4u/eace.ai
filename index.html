@@ -13525,29 +13525,55 @@ function buildIntakeContext(d, pillar){
   // System
   if(d.sysName)             lines.push(`System name: ${d.sysName}`);
   if(d.sysVersion)          lines.push(`Version: ${d.sysVersion}`);
-  if(d.sysDesc)             lines.push(`Description: ${d.sysDesc}`);
+  if(d.sysDesc||d.sysDescription) lines.push(`Description: ${d.sysDesc||d.sysDescription}`);
   if(d.intendedPurpose)     lines.push(`Intended purpose: ${d.intendedPurpose}`);
   if(d.criticality)         lines.push(`Criticality: ${d.criticality}`);
-  if(d.deploymentScale)     lines.push(`Deployment scale: ${d.deploymentScale}`);
+  if(d.deploymentScale||d.annualPersons) lines.push(`Deployment scale: ${d.deploymentScale||d.annualPersons}`);
   if(d.modelType)           lines.push(`Model type: ${d.modelType}`);
   if(d.interactionType)     lines.push(`Interaction type: ${d.interactionType}`);
-  if(d.deploymentStatus)    lines.push(`Deployment status: ${d.deploymentStatus}`);
+  if(d.deploymentStatus||d.currentStatus) lines.push(`Deployment status: ${d.deploymentStatus||d.currentStatus}`);
   if(d.deploymentDate)      lines.push(`Go-live date: ${d.deploymentDate}`);
   if(d.p1HitlAcknowledgment){
     const h=d.p1HitlAcknowledgment;
     lines.push(`P1 Human-in-the-Loop acknowledgment: confirmed by ${h.confirmerName} (${h.confirmerRole}${h.confirmerOrg?', '+h.confirmerOrg:''}) at ${h.confirmedAt}, audit timestamp ${h.auditTimestamp}, system ID ${h.systemId}, P1 version ${h.p1Version}.`);
   }
-  // Provider
-  if(d.provName)            lines.push(`Provider: ${d.provName}`);
-  if(d.provCountry)         lines.push(`Provider country: ${d.provCountry}`);
-  if(d.provAddress)         lines.push(`Provider address: ${d.provAddress}`);
+  // Provider. The FIELD_SCHEMA-driven "Master Profile" tab (System Workspace)
+  // and the MASTER_GROUPS-driven Engine Hub intake are two separate live UI
+  // surfaces that historically wrote overlapping org-identity facts under
+  // different field IDs on the same system (orgName/orgCountry/orgAddress/
+  // dpoName+dpoEmail/complianceName+complianceEmail vs provName/provCountry/
+  // provAddress/dpo/complianceOfficer) — see the Task I field-propagation
+  // regression (tests/verify_step8_field_propagation.py). d.provName etc.
+  // already includes the Organisation Profile live-fallback (applyOrgLiveFallback);
+  // the FIELD_SCHEMA name is consulted only as a last-resort fallback so an
+  // existing, more specific value is never overridden.
+  if(d.provName||d.orgName) lines.push(`Provider: ${d.provName||d.orgName}`);
+  if(d.provCountry||d.orgCountry) lines.push(`Provider country: ${d.provCountry||d.orgCountry}`);
+  if(d.provAddress||d.orgAddress) lines.push(`Provider address: ${d.provAddress||d.orgAddress}`);
   if(d.euEstablished!==undefined) lines.push(`EU established: ${d.euEstablished?'Yes':'No'}`);
   if(d.authRep)             lines.push(`Authorised representative: ${d.authRep}`);
-  if(d.complianceOfficer)   lines.push(`Compliance officer: ${d.complianceOfficer}`);
-  if(d.legalCounsel)        lines.push(`Legal counsel: ${d.legalCounsel}`);
-  if(d.dpo)                 lines.push(`DPO: ${d.dpo}`);
+  if(d.complianceOfficer||d.complianceName||d.complianceEmail) lines.push(`Compliance officer: ${d.complianceOfficer||[d.complianceName,d.complianceEmail].filter(Boolean).join(' · ')}`);
+  if(d.legalCounsel||d.legalOwner) lines.push(`Legal counsel: ${d.legalCounsel||d.legalOwner}`);
+  if(d.dpo||d.dpoName||d.dpoEmail||d.dpoPhone) lines.push(`DPO: ${d.dpo||[d.dpoName,d.dpoEmail,d.dpoPhone].filter(Boolean).join(' · ')}`);
   if(d.technicalOwner)      lines.push(`Technical owner / CTO: ${d.technicalOwner}`);
   if(d.riskOwner)           lines.push(`Risk owner: ${d.riskOwner}`);
+  if(d.orgTradeName)        lines.push(`Trade name / brand: ${d.orgTradeName}`);
+  if(d.orgRegistration)     lines.push(`Company / Tax ID: ${d.orgRegistration}`);
+  if(d.orgIndustry)         lines.push(`Industry: ${d.orgIndustry}`);
+  if(d.orgSize)             lines.push(`Organisation size: ${d.orgSize}`);
+  if(d.orgHeadcount)        lines.push(`Number of employees: ${d.orgHeadcount}`);
+  if(d.orgRole)             lines.push(`Primary organisational role: ${d.orgRole}`);
+  if(d.orgContact)          lines.push(`Primary contact person: ${d.orgContact}`);
+  if(d.orgLegal)            lines.push(`Legal form: ${d.orgLegal}`);
+  if(d.orgTaxId)            lines.push(`National tax identifier: ${d.orgTaxId}`);
+  if(d.orgVatId)            lines.push(`EU VAT / VIES identifier: ${d.orgVatId}`);
+  if(d.orgEuid)             lines.push(`European Unique Identifier (EUID): ${d.orgEuid}`);
+  if(d.orgLei)              lines.push(`Legal Entity Identifier (LEI): ${d.orgLei}`);
+  if(d.orgWebsite)          lines.push(`Corporate website: ${d.orgWebsite}`);
+  if(d.gdprLead)            lines.push(`Lead supervisory authority / DPA: ${d.gdprLead}`);
+  if(d.aiGovernanceOwner)   lines.push(`Internal AI governance owner: ${d.aiGovernanceOwner}`);
+  if(d.boardApproval)       lines.push(`Board-level AI governance approval date: ${d.boardApproval}`);
+  if(d.policyFramework)     lines.push(`Internal AI policy reference: ${d.policyFramework}`);
   if(d.technicalRiskLead)   lines.push(`Technical risk lead: ${d.technicalRiskLead}`);
   if(d.gpaiInterfaceRiskManager) lines.push(`GPAI interface risk manager: ${d.gpaiInterfaceRiskManager}`);
   if(d.crossBorderRiskCoordinator) lines.push(`Cross-border risk coordinator: ${d.crossBorderRiskCoordinator}`);
@@ -13561,17 +13587,26 @@ function buildIntakeContext(d, pillar){
   // Deployer
   if(d.deployerName)        lines.push(`Deployer: ${d.deployerName}`);
   if(d.deployerType)        lines.push(`Deployer type: ${d.deployerType}`);
-  if(d.deployerCountry?.length) lines.push(`Deployer country: ${Array.isArray(d.deployerCountry)?d.deployerCountry.join(', '):d.deployerCountry}`);
+  { const dCty = (d.deployerCountry?.length?d.deployerCountry:null) || (d.deployerCountries?.length?d.deployerCountries:null);
+    if(dCty?.length) lines.push(`Deployer country: ${Array.isArray(dCty)?dCty.join(', '):dCty}`); }
   if(d.deploymentLocation)  lines.push(`Deployment location: ${d.deploymentLocation}`);
   if(d.deploymentContext)   lines.push(`Deployment context: ${d.deploymentContext}`);
   if(d.whereOutputsUsed)    lines.push(`Where outputs used: ${d.whereOutputsUsed}`);
   // Geography
-  if(d.countryDeploy?.length)   lines.push(`Deployment countries: ${Array.isArray(d.countryDeploy)?d.countryDeploy.join(', '):d.countryDeploy}`);
-  if(d.countryUsers?.length)    lines.push(`User countries: ${Array.isArray(d.countryUsers)?d.countryUsers.join(', '):d.countryUsers}`);
+  { const cd = (d.countryDeploy?.length?d.countryDeploy:null) || (d.deploymentCountries?.length?d.deploymentCountries:null);
+    if(cd?.length) lines.push(`Deployment countries: ${Array.isArray(cd)?cd.join(', '):cd}`); }
+  { const cu = (d.countryUsers?.length?d.countryUsers:null) || (d.endUserCountries?.length?d.endUserCountries:null);
+    if(cu?.length) lines.push(`User countries: ${Array.isArray(cu)?cu.join(', '):cu}`); }
   if(d.crossBorder)             lines.push(`Cross-border: Yes${d.crossBorderSpec?' — '+d.crossBorderSpec:''}`);
+  if(d.crossBorderUse)          lines.push(`Cross-border use: ${d.crossBorderUse}`);
+  if(d.nonEuCountries?.length)  lines.push(`Non-EU/EEA countries involved: ${Array.isArray(d.nonEuCountries)?d.nonEuCountries.join(', '):d.nonEuCountries}`);
+  if(d.hostingCountry)          lines.push(`Hosting country: ${d.hostingCountry}`);
+  if(d.endUseGeo?.length)       lines.push(`End-user / affected persons geography: ${Array.isArray(d.endUseGeo)?d.endUseGeo.join(', '):d.endUseGeo}`);
   if(d.sector?.length)          lines.push(`Sector(s): ${Array.isArray(d.sector)?d.sector.join(', '):d.sector}`);
   if(d.subSector)               lines.push(`Sub-sector: ${d.subSector}`);
   if(d.affectedPersons)         lines.push(`Affected persons: ${d.affectedPersons}`);
+  if(d.memberStates?.length)    lines.push(`EU Member States involved: ${Array.isArray(d.memberStates)?d.memberStates.join(', '):d.memberStates}`);
+  if(d.orgRegion)               lines.push(`Region (EU / EEA / non-EU): ${d.orgRegion}`);
   // Art. 50
   if(d.r50Interacts!==undefined)  lines.push(`Art. 50 — interacts with persons: ${d.r50Interacts?'Yes':'No'}`);
   if(d.r50Emotion!==undefined)    lines.push(`Art. 50 — emotion recognition: ${d.r50Emotion?'Yes':'No'}`);
@@ -13580,11 +13615,24 @@ function buildIntakeContext(d, pillar){
   if(d.r50Deepfake!==undefined)   lines.push(`Art. 50 — deepfakes: ${d.r50Deepfake?'Yes':'No'}`);
   if(d.r50Workers!==undefined)    lines.push(`Art. 50 — workers affected: ${d.r50Workers?'Yes':'No'}`);
   // GPAI
-  if(d.gpai!==undefined)          lines.push(`GPAI dependency: ${d.gpai?'Yes':'No'}${d.gpai&&d.gpaiModel?' — '+d.gpaiModel:''}`);
-  if(d.gpaiProvider)              lines.push(`GPAI provider: ${d.gpaiProvider}`);
+  if(d.gpai!==undefined||d.gpaiDependency!==undefined){ const g=d.gpai!==undefined?d.gpai:d.gpaiDependency; lines.push(`GPAI dependency: ${g?'Yes':'No'}${g&&d.gpaiModel?' — '+d.gpaiModel:''}`); }
+  if(d.gpaiProvider||d.baseModelProvider?.length) lines.push(`GPAI provider: ${d.gpaiProvider||(Array.isArray(d.baseModelProvider)?d.baseModelProvider.join(', '):d.baseModelProvider)}`);
   if(d.gpaiScenario)              lines.push(`GPAI scenario: ${d.gpaiScenario}`);
-  if(d.fineTune!==undefined)      lines.push(`Fine-tuning: ${d.fineTune?'Yes':'No'}`);
+  if(d.fineTune!==undefined) lines.push(`Fine-tuning: ${d.fineTune?'Yes':'No'}${d.finetuningDesc?' — '+d.finetuningDesc:''}`);
+  else if(d.finetuned!==undefined) lines.push(`Fine-tuning: ${d.finetuned}${d.finetuningDesc?' — '+d.finetuningDesc:''}`);
   if(d.zdr!==undefined)           lines.push(`Zero data retention: ${d.zdr?'Yes':'No'}`);
+  if(d.isGpai!==undefined||d.isGpaiModel!==undefined) lines.push(`System is itself a GPAI model: ${(d.isGpai!==undefined?d.isGpai:d.isGpaiModel)?'Yes':'No'}`);
+  if(d.systemCardUrl||d.modelCardUrl) lines.push(`GPAI system/model card URL: ${d.systemCardUrl||d.modelCardUrl}`);
+  if(d.trainCompute)              lines.push(`Training compute: ${d.trainCompute}`);
+  if(d.gpaiCoPSignatory!==undefined||d.gpaiCop) lines.push(`GPAI Code of Practice signatory: ${d.gpaiCoPSignatory!==undefined?(d.gpaiCoPSignatory?'Yes':'No'):d.gpaiCop}`);
+  if(d.modelArchitecture)         lines.push(`Model architecture: ${d.modelArchitecture}`);
+  if(d.knowledgeCutoff)           lines.push(`Training data cut-off: ${d.knowledgeCutoff}`);
+  if(d.downstreamMod)             lines.push(`Downstream modifications: ${d.downstreamMod}`);
+  if(d.openSource||d.freeOpenSource) lines.push(`Open-source model: ${d.openSource||d.freeOpenSource}`);
+  if(d.modelUpdateFreq)           lines.push(`Model update frequency: ${d.modelUpdateFreq}`);
+  if(d.internalModel!==undefined) lines.push(`Internally developed model: ${d.internalModel?'Yes':'No'}`);
+  if(d.thirdPartyModel!==undefined) lines.push(`Third-party model: ${d.thirdPartyModel?'Yes':'No'}`);
+  if(d.foundationModel)           lines.push(`Uses foundation model: ${d.foundationModel}`);
   // Privacy
   if(d.personalData!==undefined)  lines.push(`Personal data: ${d.personalData?'Yes':'No'}`);
   if(d.specialCategories!==undefined) lines.push(`Special categories: ${d.specialCategories?'Yes':'No'}${d.specialCategoriesSpec?' — '+d.specialCategoriesSpec:''}`);
@@ -13594,27 +13642,113 @@ function buildIntakeContext(d, pillar){
   if(d.knownLimitations)          lines.push(`Known limitations: ${d.knownLimitations}`);
   if(d.gdprRole)                  lines.push(`GDPR role: ${d.gdprRole}`);
   if(d.adm!==undefined)           lines.push(`Automated decision-making (Art.22): ${d.adm?'Yes':'No'}`);
+  if(d.personalDataTraining!==undefined) lines.push(`Personal data used in model training: ${d.personalDataTraining?'Yes':'No'}`);
+  if(d.trainingMethodology)       lines.push(`Training methodology: ${d.trainingMethodology}`);
+  if(d.dataStorageLocation)       lines.push(`Data storage location: ${d.dataStorageLocation}`);
+  if(d.subProcessors||d.subprocessorsUpstream) lines.push(`Sub-processors / upstream suppliers: ${d.subProcessors||d.subprocessorsUpstream}`);
+  if(d.cookies!==undefined)       lines.push(`Uses cookies / tracking technologies: ${d.cookies?'Yes':'No'}`);
+  if(d.childrenData!==undefined)  lines.push(`Processes children's data (under 18): ${d.childrenData?'Yes':'No'}`);
+  if(d.communicationsMetadata!==undefined) lines.push(`Processes communications metadata: ${d.communicationsMetadata?'Yes':'No'}`);
+  if(d.profiling!==undefined)     lines.push(`Profiling of natural persons: ${d.profiling?'Yes':'No'}`);
+  if(d.dataCategories||d.dataTypes) lines.push(`Data categories / types processed: ${d.dataCategories||d.dataTypes}`);
+  if(d.dataRetention)             lines.push(`Data retention policy: ${d.dataRetention}`);
+  if(d.userType?.length)          lines.push(`Affected persons — user type: ${Array.isArray(d.userType)?d.userType.join(', '):d.userType}`);
+  if(d.employeesAffected!==undefined) lines.push(`Employees affected: ${d.employeesAffected?'Yes':'No'}`);
+  if(d.consumersAffected!==undefined) lines.push(`Consumers affected: ${d.consumersAffected?'Yes':'No'}`);
+  if(d.childrenAffected!==undefined)  lines.push(`Children/minors affected: ${d.childrenAffected?'Yes':'No'}`);
+  if(d.vulnerableAffected!==undefined) lines.push(`Vulnerable groups affected: ${d.vulnerableAffected?'Yes':'No'}`);
   // Governance
   if(d.qmsStandard)               lines.push(`QMS standard: ${d.qmsStandard}`);
   if(d.riskMethodology)           lines.push(`Risk methodology: ${d.riskMethodology}`);
   if(d.conformityRoute)           lines.push(`Conformity route: ${d.conformityRoute}`);
   if(d.notifiedBody)              lines.push(`Notified body: ${d.notifiedBody}`);
   if(d.internalTesting)           lines.push(`Internal testing: ${d.internalTesting}`);
-  if(d.cyberFramework)            lines.push(`Cybersecurity framework: ${d.cyberFramework}`);
+  if(d.cyberFramework||d.cybersecFramework?.length) lines.push(`Cybersecurity framework: ${d.cyberFramework||(Array.isArray(d.cybersecFramework)?d.cybersecFramework.join(', '):d.cybersecFramework)}`);
+  if(d.previousConformity!==undefined) lines.push(`Previous conformity assessment exists: ${d.previousConformity?'Yes':'No'}`);
+  if(d.harmonisedStandards)       lines.push(`Harmonised standards applied: ${d.harmonisedStandards}`);
+  if(d.cloudProvider)             lines.push(`Cloud provider and regions: ${d.cloudProvider}`);
+  if(d.ceMarkingStatus)           lines.push(`CE marking status: ${d.ceMarkingStatus}`);
+  if(d.isoAndSocCerts)            lines.push(`ISO / SOC certifications: ${d.isoAndSocCerts}`);
+  if(d.qmsImplemented!==undefined) lines.push(`QMS implemented: ${d.qmsImplemented?'Yes':'No'}`);
+  if(d.reviewFrequency)           lines.push(`Risk review frequency: ${d.reviewFrequency}`);
+  if(d.validationActivities)      lines.push(`Validation activities: ${d.validationActivities}`);
+  if(d.annexPoint)                lines.push(`Annex III classification point: ${d.annexPoint}`);
+  if(d.continuousLearning!==undefined) lines.push(`Continuous learning / retraining: ${d.continuousLearning?'Yes':'No'}`);
+  if(d.explainability!==undefined) lines.push(`Explainability / XAI implemented: ${d.explainability?'Yes':'No'}`);
+  if(d.annexIVRef)                lines.push(`Annex IV document reference: ${d.annexIVRef}`);
   // Languages
   if(d.authLang)                  lines.push(`Authoritative language: ${d.authLang}`);
-  if(d.outputLang?.length)        lines.push(`Output language(s): ${Array.isArray(d.outputLang)?d.outputLang.join(', '):d.outputLang}`);
+  { const ol=(d.outputLang?.length?d.outputLang:null)||(d.outputLanguages?.length?d.outputLanguages:null);
+    if(ol?.length) lines.push(`Output language(s): ${Array.isArray(ol)?ol.join(', '):ol}`); }
   if(d.ifuLanguages)              lines.push(`IFU languages: ${d.ifuLanguages}`);
   if(d.linguisticPolicy)          lines.push(`Linguistic fidelity / translation review policy: ${d.linguisticPolicy}`);
+  if(d.contractLanguages)         lines.push(`Contractual instrument languages: ${d.contractLanguages}`);
   // NIS2
-  if(d.nis2Provider && d.nis2Provider!=='Not classified') lines.push(`NIS2 — Provider: ${d.nis2Provider}`);
-  if(d.nis2Deployer && d.nis2Deployer!=='Not classified') lines.push(`NIS2 — Deployer: ${d.nis2Deployer}`);
+  { const nP = d.nis2Provider || d.nisEntityProvider;
+    if(nP && nP!=='Not classified') lines.push(`NIS2 — Provider: ${nP}`); }
+  { const nD = d.nis2Deployer || d.nisEntityDeployer;
+    if(nD && nD!=='Not classified') lines.push(`NIS2 — Deployer: ${nD}`); }
+  if(typeof d.criticalInfra==='boolean') lines.push(`Critical infrastructure involvement: ${d.criticalInfra?'Yes':'No'}`);
+  else if(d.criticalInfra) lines.push(`Critical infrastructure involvement: ${d.criticalInfra}`);
+  if(d.criticalInfraSector)       lines.push(`Critical infrastructure sector: ${d.criticalInfraSector}`);
+  if(d.loggingEnabled)            lines.push(`Logging enabled: ${d.loggingEnabled}`);
+  if(d.logRetention)              lines.push(`Log retention period: ${d.logRetention}`);
+  if(d.incidentResponse)          lines.push(`Incident response process: ${d.incidentResponse}`);
+  if(d.vulnDisclosure)            lines.push(`Vulnerability disclosure process: ${d.vulnDisclosure}`);
   // Value chain
   if(d.primaryActorRole)          lines.push(`Primary role: ${d.primaryActorRole}`);
   if(d.p2aHandoverRef)            lines.push(`P2A reference: ${d.p2aHandoverRef}`);
+  if(d.providerPackageRef)        lines.push(`P2A execution / package reference: ${d.providerPackageRef}`);
+  if(d.hasSupplyChain!==undefined) lines.push(`Other organisations involved in supply chain: ${d.hasSupplyChain?'Yes':'No'}`);
+  if(d.vendorName||d.vendorRole)  lines.push(`Vendor / supplier: ${[d.vendorName,d.vendorRole].filter(Boolean).join(' — ')}`);
+  if(d.euImporter||d.importerName) lines.push(`EU importer: ${[d.importerName,d.euImporter].filter(Boolean).join(' — ')}`);
+  if(d.euDistributor||d.distributorName) lines.push(`EU distributor: ${[d.distributorName,d.euDistributor].filter(Boolean).join(' — ')}`);
+  if(d.systemIntegrator)          lines.push(`System integrator involved: ${d.systemIntegrator}`);
+  if(d.apiDependencies)           lines.push(`API / third-party dependencies: ${d.apiDependencies}`);
+  if(d.deployerAddress)           lines.push(`Deployer registered address: ${d.deployerAddress}`);
+  if(d.deployerComplianceOfficer) lines.push(`Deployer Compliance Officer: ${d.deployerComplianceOfficer}`);
+  if(d.deployerDPO)               lines.push(`Deployer DPO: ${d.deployerDPO}`);
+  if(d.deploymentLifetime)        lines.push(`Expected deployment lifetime: ${d.deploymentLifetime}`);
+  // Deployment technical
+  if(d.deploymentMode)            lines.push(`Deployment mode: ${d.deploymentMode}`);
+  if(d.technicalDeployment)       lines.push(`Technical deployment model: ${d.technicalDeployment}`);
+  if(d.internetRequired!==undefined) lines.push(`Internet connectivity required: ${d.internetRequired?'Yes':'No'}`);
+  if(d.offlineCapability!==undefined) lines.push(`Offline capability: ${d.offlineCapability?'Yes':'No'}`);
+  if(d.apiExposure!==undefined)   lines.push(`API exposed to third parties: ${d.apiExposure?'Yes':'No'}`);
+  if(d.connectedSystems)          lines.push(`Connected external systems: ${d.connectedSystems}`);
+  if(d.productionMonitoring)      lines.push(`Production monitoring in place: ${d.productionMonitoring}`);
+  // Legal / contractual
+  { const glp = d.govLawProvider || d.govLawProvider2 || d.governingLawProv;
+    if(glp) lines.push(`Governing law — Provider obligations: ${glp}`); }
+  { const gld = d.govLawDeployer || d.govLawDeployer2 || d.governingLawDep;
+    if(gld) lines.push(`Governing law — Deployer obligations: ${gld}`); }
+  if(d.disputeResolution)         lines.push(`Dispute resolution preference: ${d.disputeResolution}`);
+  { const ai = d.arbitrationInstitution || d.arbitrationInst;
+    if(ai) lines.push(`Arbitration institution: ${ai}`); }
+  if(d.arbitrationSeat)           lines.push(`Seat of arbitration: ${d.arbitrationSeat}`);
+  { const al = d.arbitrationLang || d.proceedingsLang;
+    if(al) lines.push(`Language of arbitration / proceedings: ${al}`); }
+  // Exemptions (Art. 2)
+  { const exems=[]; if(d.exemResearch) exems.push('Scientific research / clinical investigation'); if(d.exemMilitary) exems.push('Military / national security use'); if(d.exemPersonal) exems.push('Personal non-professional use'); if(d.exemOpenSource) exems.push('Free and open-source model exemption');
+    if(exems.length) lines.push(`Article 2 exemption(s) claimed: ${exems.join(', ')}`);
+    else if(d.exemNone) lines.push(`Article 2 exemption(s) claimed: None`); }
   // Status
   if(d.priorIncidents!==undefined) lines.push(`Prior incidents: ${d.priorIncidents?'Yes':'No'}`);
+  else if(d.incidents!==undefined) lines.push(`Prior incidents: ${d.incidents}`);
+  if(d.priorNearMisses!==undefined) lines.push(`Prior near-misses: ${d.priorNearMisses?'Yes':'No'}`);
+  else if(d.nearMisses!==undefined) lines.push(`Prior near-misses: ${d.nearMisses}`);
   if(d.priorRegulatory!==undefined) lines.push(`Prior regulatory interactions: ${d.priorRegulatory?'Yes':'No'}`);
+  else if(d.regulatoryContact!==undefined) lines.push(`Prior regulatory interactions: ${d.regulatoryContact}`);
+  if(typeof d.priorAudit==='boolean') lines.push(`Prior internal AI audit: ${d.priorAudit?'Yes':'No'}`);
+  else if(d.priorAudit)           lines.push(`Prior internal AI audit: ${d.priorAudit}`);
+  if(d.sysInternalId)             lines.push(`Internal system ID: ${d.sysInternalId}`);
+  if(d.businessPurpose)           lines.push(`Business purpose: ${d.businessPurpose}`);
+  if(d.lifecycleStatus)           lines.push(`Lifecycle status: ${d.lifecycleStatus}`);
+  if(d.personImpact)              lines.push(`Impact on natural persons: ${d.personImpact}`);
+  if(d.marketDate)                lines.push(`Planned market date: ${d.marketDate}`);
+  if(d.targetPlacementDate)       lines.push(`Target market placement date: ${d.targetPlacementDate}`);
+  if(d.lastMajorChange)           lines.push(`Last major modification: ${d.lastMajorChange}`);
+  if(d.rerunReason)               lines.push(`Reason for re-assessment: ${d.rerunReason}`);
   // Overlays
   const ov=[].concat(d.combinedOverlays||[],d.natOverlays||[],d.secOverlays||[]).filter(Boolean);
   if(ov.length) lines.push(`Active overlays: ${ov.join(', ')}`);
@@ -15646,6 +15780,7 @@ const ORG_FALLBACK_COMPOSERS = {
   complianceOfficer:function(org){ return composeOrgContact(org.complianceName, org.complianceEmail); },
   legalCounsel:     function(org){ return composeOrgContact(org.legalName, org.legalEmail); },
   dpo:              function(org){ return composeOrgContact(org.dpoName, org.dpoEmail); },
+  dpoPhone:         function(org){ return org.dpoPhone; },
   technicalOwner:   function(org){ return composeOrgContact(org.ctoName, org.ctoEmail); },
   riskOwner:        function(org){ return composeOrgContact(org.riskOwnerName, org.riskOwnerEmail); },
   // These three fall back to the general Risk Owner in the absence of a
@@ -15667,6 +15802,26 @@ const ORG_FALLBACK_COMPOSERS = {
   // direct passthrough so the live-fallback plumbing surfaces it for every
   // system without a separate per-system copy of the same list.
   regulatoryContactRegistry:function(org){ return org.regulatoryContactRegistry; },
+  // These legal-identity and internal-governance fields are, like
+  // regulatoryContactRegistry above, org-wide only by nature — a VAT
+  // number or a board approval date is a fact about the organisation, not
+  // about an individual AI system — so each is a direct passthrough
+  // composer rather than a per-system override mapping. Added as part of
+  // the Task I field-propagation regression: previously these ten
+  // Organisation Profile fields were captured in the UI and persisted but
+  // never reached generation under any field name, because no composer
+  // existed to surface them through applyOrgLiveFallback/getExecutionInputData.
+  orgLegal:         function(org){ return org.orgLegal; },
+  orgRegistration:  function(org){ return org.orgRegistration; },
+  orgTaxId:         function(org){ return org.orgTaxId; },
+  orgVatId:         function(org){ return org.orgVatId; },
+  orgEuid:          function(org){ return org.orgEuid; },
+  orgLei:           function(org){ return org.orgLei; },
+  orgWebsite:       function(org){ return org.orgWebsite; },
+  gdprLead:         function(org){ return org.gdprLead; },
+  aiGovernanceOwner:function(org){ return org.aiGovernanceOwner; },
+  boardApproval:    function(org){ return org.boardApproval; },
+  policyFramework:  function(org){ return org.policyFramework; },
 };
 // resolveCanonicalField: the single resolver for "what is this field's
 // effective value for this system", honouring — in priority order — an

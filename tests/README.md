@@ -21,6 +21,7 @@ python3 tests/verify_step4_completeness_validator.py  # 5-state deterministic co
 python3 tests/verify_step5_source_governance_and_enrichment.py  # source-status labels, NB hierarchy, empty-annex rule, Vulnerability column, Step 3B targeting
 python3 tests/verify_step6_readiness_and_reassessment.py  # extractUnresolvedFields, computeReadinessState (8-state ladder + 6 dimensions), classifyReassessmentDelta (4-class precedence)
 python3 tests/verify_step7_language_propagation.py  # language-exemption clauses on the new closed-vocabulary labels; languageDirective precedes all new prompt sections, incl. a non-English authLang case
+python3 tests/verify_step8_field_propagation.py  # every Master Profile / Organisation Profile field ID actually reaches buildIntakeContext's generation-context output (214/214 system fields, 26/26 org fields, live-tested)
 ```
 
 All need Playwright with a Chromium binary available (see
@@ -59,4 +60,22 @@ only ever advance the ladder and that `superseded` is terminal, and that
 the reassessment classifier's 4-class precedence
 (CLASSIFICATION_RELEVANT_CHANGE > MATERIAL_FACT_CHANGE > NEW_EVIDENCE_ONLY
 > DOCUMENT_COMPLETION_ONLY) holds even when multiple signals are present
-in the same delta at once.
+in the same delta at once. Run `verify_step8_field_propagation.py` before
+any commit touching `buildIntakeContext`, `ORG_FALLBACK_COMPOSERS`, or
+`applyOrgLiveFallback` — this is the field-propagation regression: it
+enumerates every field ID from `MASTER_GROUPS`/`MASTER_GROUPS_EXT2` (the
+Engine Hub intake form), `FIELD_SCHEMA` (the System Workspace "Master
+Profile" tab), and `ORG_PROFILE_SCHEMA` (the Organisation Profile), sets a
+unique value per field on an isolated synthetic system, and confirms it
+actually reaches the assembled "SYSTEM PROFILE — USER-SUPPLIED INPUT"
+prompt text via `getExecutionInputData()`/`buildIntakeContext` — i.e. it
+tests generation-context resolution, not just whether a field renders in a
+UI form. This test caught (and this session's commit fixed) ~130 fields
+that were captured by one of the two live intake screens but silently
+never reached generation, including several same-fact-different-field-ID
+collisions (`sysDesc`/`sysDescription`, `countryDeploy`/
+`deploymentCountries`, `provName`/`orgName`, `nis2Provider`/
+`nisEntityProvider`, and others) where a user could fill in the "Master
+Profile" tab and see nothing change in a generated document. A regression
+here silently re-orphans user-supplied facts without any error or visible
+symptom short of this test.
