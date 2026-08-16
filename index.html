@@ -7481,6 +7481,24 @@ async function execApiMode(idx, signal){
   out.estimatedPages=validation.estimatedPages;
   out.continuationCount=0;
 
+  // Step 4 — deterministic artefact-completeness verdict, distinct from
+  // validateGeneratedOutput above (which checks whether generation itself
+  // was truncated/empty/placeholder, not whether the artefact's required
+  // anatomy is present). Advisory only, same as validation: never blocks
+  // or triggers a paid regeneration on its own. REQUIRES_INTERNAL_
+  // COMPLETION and PRESENT are logged to the audit trail so a reviewer has
+  // a durable record of which outputs the engine itself flagged as needing
+  // a second pass, rather than relying on someone reading all 30+ outputs.
+  try{
+    const completeness = assessArtefactCompleteness(exec.pillar, out, text);
+    out.completeness = completeness;
+    if(completeness.status==='REQUIRES_INTERNAL_COMPLETION' || completeness.status==='PRESENT'){
+      logAudit('completeness', `Output ${out.code} flagged ${completeness.status} (coverage ${Math.round(completeness.coverage*100)}%${completeness.completionMarkersFound.length?', markers: '+completeness.completionMarkersFound.join(', '):''}).`, exec.pillar, st.data.sysName||'—');
+    }
+  }catch(e){
+    console.error('assessArtefactCompleteness failed for', out.code, e);
+  }
+
   // Proven legacy behaviour: any successful non-empty response is complete.
   // stop_reason is retained in telemetry for review, but it never blocks the
   // sequence and never triggers a paid continuation or regeneration.
@@ -8139,6 +8157,175 @@ Where the system is intended for deployment, provision or use in more than one E
 // briefing, overlay map, evidence register or sectoral breakdown that should
 // cite these results rather than re-deriving them (see p1BriefFormat below).
 const CORE_P1_CLASSIFICATION_CODES = new Set(['OTL','OCL','O01','O02','O03','O04','O05','O06','O13','O14']);
+
+// Shared artefact-type taxonomy — the same 8 types and detection heuristic
+// used both by Step 1's prompt-side OPERATIONAL ARTEFACT COMPLETENESS
+// CONTRACT (buildSystemPrompt below) and Step 4's post-generation
+// completeness validator (assessArtefactCompleteness). Kept as one shared
+// definition deliberately: a prompt-side type list that could silently
+// drift from the post-generation validator's list would make the
+// validator's PRESENT/STRUCTURALLY COMPLETE/etc. verdicts meaningless —
+// it would be checking for anatomy the prompt never actually asked for.
+const ARTEFACT_MIN_ANATOMY = {
+  SOP_PROCEDURE: 'Purpose; Scope; Definitions; Roles; minimum executable steps (numbered, in sequence) where the artefact involves a process; Triggers; Decision Criteria; Escalation; Evidence/Records; Monitoring; Review; Approval.',
+  MATRIX: 'Defined scales/criteria for every column (state what each value means, not just a column header); a populated structure with real rows for this system — never an empty template; Owner; Decision Consequence (what changes because of a given cell’s value); Evidence Linkage.',
+  REGISTER_LOG: 'Defined fields (named, not just implied); Owner; Retention period; Access/integrity control; Review cadence; usable row/entry rules (what triggers a new entry, in what format).',
+  FORM_TEMPLATE: 'All fields labelled; each field’s mandatory/optional state stated; a completion instruction (who fills it in, when, from what source); an approval/sign-off block where the underlying obligation requires one.',
+  POLICY: 'Purpose; Scope; Principles/Rules (the actual substantive rules, not a restatement of the legal requirement); Responsibilities; Exceptions; Escalation; Monitoring; Review; Approval.',
+  CONTRACT: 'Operative clauses with real obligations and parties/placeholder fields — not a description of what a clause should cover. A clause that only says "this instrument should address X" is a defect, not a clause.',
+  NOTICE: 'The actual deployable notice text a reader would see, in context (timing, placement, audience) — not a description of what a transparency notice should communicate.',
+  DPIA_FRIA: 'A completed assessment structure with real content: description of processing/deployment; necessity and proportionality; risk identification with likelihood/severity; safeguards/mitigations; residual risk; sign-off/review — not a checklist of what a DPIA/FRIA should contain.',
+};
+function detectArtefactTypes(out){
+  const probe = (String((out&&out.title)||'')+' '+String((out&&out.cat)||'')).toLowerCase();
+  const types = [];
+  const add=(t,re)=>{ if(re.test(probe)) types.push(t); };
+  add('DPIA_FRIA', /dpia|fria|impact assessment/);
+  add('CONTRACT', /contract|instrument|agreement|declaration|\bdpa\b/);
+  add('NOTICE', /notice|disclosure|notification|\blabel\b|marking/);
+  add('MATRIX', /matrix|dashboard|scorecard|\bmap\b/);
+  add('REGISTER_LOG', /register|\blog\b|logging|record|trail|audit/);
+  add('FORM_TEMPLATE', /\bform\b|template|checklist/);
+  add('POLICY', /policy|framework|governance|manual|code of conduct/);
+  add('SOP_PROCEDURE', /procedure|protocol|\bplan\b|\bsop\b|specification|implementation|management|assessment|pathway|instruction/);
+  if(!types.length) types.push('SOP_PROCEDURE');
+  return [...new Set(types)];
+}
+
+// STEP 4 — DETERMINISTIC ARTEFACT-COMPLETENESS VALIDATOR. Post-generation
+// counterpart to Step 1's prompt-side completeness contract: that tells the
+// model what to produce; this checks, by rule rather than by trusting the
+// model's own report, what it actually produced. Reuses the exact same
+// artefact-type detection and ARTEFACT_MIN_ANATOMY dimensions the prompt
+// itself was built from, so a STRUCTURALLY_COMPLETE verdict means "this
+// output contains textual evidence of every anatomy element the prompt
+// asked for" — not a separate, potentially inconsistent judgement.
+//
+// This is a deterministic, keyword/structure-based proxy, not semantic
+// understanding — it cannot verify legal correctness, only structural
+// completeness signals (the same limitation the existing validateGenerated
+// Output() truncation checks already have, and is explicit about). Five
+// states, matching the specified vocabulary exactly:
+//   MISSING                    — empty, near-empty, or the model correctly
+//                                 declined per the NO_DEDICATED_SECTION
+//                                 status record (not a generation defect).
+//   REQUIRES_INTERNAL_COMPLETION — the artefact is substantive but contains
+//                                 at least one of the project's own
+//                                 established incompleteness markers
+//                                 ([PLACEHOLDER...], [ACT], [HASH — ACT],
+//                                 REQUIRED / NOT PROVIDED, [AWAITING...],
+//                                 [OFFICIAL SOURCE VERIFICATION REQUIRED],
+//                                 etc. — not invented tokens, the same ones
+//                                 already used throughout the canonical
+//                                 text and this session's authored specs).
+//   PARTIALLY_POPULATED        — no completion markers, but under 80% of
+//                                 the detected type(s)' anatomy dimensions
+//                                 have textual evidence.
+//   PRESENT                    — content exists but under 40% dimension
+//                                 coverage — present, but not yet
+//                                 recognisable as the artefact type it
+//                                 claims to be.
+//   STRUCTURALLY_COMPLETE      — no completion markers, >=80% dimension
+//                                 coverage.
+const ARTEFACT_ANATOMY_DIMENSIONS = Object.freeze({
+  SOP_PROCEDURE: [
+    {label:'purpose/scope', re:/\bpurpose\b|\bscope\b/i},
+    {label:'roles/owner', re:/\brole\b|\bowner\b|\bresponsib/i},
+    {label:'executable steps', re:/\n\s*(step\s*\d|\d+[.)]\s)|step-by-step/i},
+    {label:'triggers/decision criteria', re:/\btrigger\b|\bcriteri/i},
+    {label:'escalation', re:/escalat/i},
+    {label:'evidence/records', re:/\bevidence\b|\brecord/i},
+    {label:'review/approval', re:/\breview\b|\bapprov|sign[- ]?off/i},
+  ],
+  MATRIX: [
+    {label:'defined scales/criteria', re:/\bscale\b|\blikelihood\b|\bseverity\b|\b(low|medium|high)\b/i},
+    {label:'populated rows', re:/(\|[^\n|]+\|[^\n|]+\|)|(\n\s*\d+[.)]\s.+){3,}/},
+    {label:'owner', re:/\bowner\b/i},
+    {label:'decision consequence', re:/escalat|suspend|\bblock|action required/i},
+    {label:'evidence linkage', re:/\bevidence\b/i},
+  ],
+  REGISTER_LOG: [
+    {label:'defined fields', re:/(\|[^\n|]+\|[^\n|]+\|)|\bfield\b/i},
+    {label:'owner', re:/\bowner\b/i},
+    {label:'retention', re:/\bretention\b/i},
+    {label:'access/integrity control', re:/access control|\bintegrity\b/i},
+    {label:'review cadence', re:/\breview\b/i},
+  ],
+  FORM_TEMPLATE: [
+    {label:'labelled fields', re:/\[[^\]]+\]/},
+    {label:'mandatory/optional state', re:/\bmandatory\b|\boptional\b/i},
+    {label:'completion instruction', re:/\bcomplet(e|ed|ion)\b|\bfill\b/i},
+    {label:'approval/sign-off', re:/\bapprov|sign[- ]?off/i},
+  ],
+  POLICY: [
+    {label:'purpose/scope', re:/\bpurpose\b|\bscope\b/i},
+    {label:'principles/rules', re:/\bprincipl|\brule\b/i},
+    {label:'responsibilities', re:/\bresponsib/i},
+    {label:'exceptions', re:/\bexception\b/i},
+    {label:'escalation', re:/escalat/i},
+    {label:'review/approval', re:/\breview\b|\bapprov/i},
+  ],
+  CONTRACT: [
+    {label:'operative clauses', re:/\bclause\b|\barticle\s*\d|\bsection\s*\d/i},
+    {label:'parties/placeholders', re:/\bpart(y|ies)\b|\[[^\]]+\]/i},
+    {label:'obligations', re:/\bshall\b|\bobligation/i},
+    {label:'change/incident/audit terms', re:/\bamend|\bincident|\baudit/i},
+    {label:'execution fields', re:/\bsignatur|sign[- ]?off|\bexecut/i},
+  ],
+  NOTICE: [
+    {label:'deployable notice text', re:/\byou\b|\bthis (system|service|application)\b/i},
+    {label:'timing/placement', re:/\btiming\b|\bplacement\b|\bwhen\b/i},
+    {label:'audience', re:/\buser\b|\baudience\b/i},
+  ],
+  DPIA_FRIA: [
+    {label:'processing/deployment description', re:/\bprocessing\b|\bdeployment\b/i},
+    {label:'necessity/proportionality', re:/\bnecessity\b|\bproportionality\b/i},
+    {label:'risk identification', re:/\brisk\b/i},
+    {label:'safeguards/mitigations', re:/safeguard|mitigat/i},
+    {label:'residual risk', re:/\bresidual\b/i},
+    {label:'sign-off/review', re:/sign[- ]?off|\bapprov|\breview\b/i},
+  ],
+});
+const COMPLETION_MARKERS_RE = /\[PLACEHOLDER[^\]]*\]|\[ACT\]|\[HASH\s*[—-]\s*ACT\]|\[ENTER VALUE\]|\[ENTER INTERNAL DATA\]|\[FETCH\]|\[AWAITING[^\]]*\]|\[OFFICIAL SOURCE VERIFICATION REQUIRED\]|REQUIRED\s*\/\s*NOT PROVIDED|TO BE COMPLETED|\[YES\/NO\s*[—-]\s*ACT\]/gi;
+function assessArtefactCompleteness(pillar, out, generatedText){
+  const text = String(generatedText||'');
+  const trimmed = text.trim();
+  const types = detectArtefactTypes(out);
+  const result = {
+    pillar, code: (out&&out.code)||null, types,
+    status: 'MISSING', coverage: 0,
+    dimensionsFound: [], dimensionsMissing: [], completionMarkersFound: [],
+    length: trimmed.length,
+  };
+  if(!trimmed || trimmed.length < 150) return result; // MISSING
+  if(trimmed.indexOf('CANONICAL SPECIFICATION STATUS: No dedicated canonical specification is currently defined') === 0){
+    // The model correctly declined per NO_DEDICATED_SECTION — this is the
+    // intended, non-fabricating outcome for that state, not a generation
+    // defect, but it is still not a generated artefact. MISSING is the
+    // accurate structural verdict; NO_DEDICATED_SECTION is why (query
+    // getCanonicalSpecStatus for that), not something this validator
+    // re-derives from prose.
+    return result;
+  }
+  const markerMatches = text.match(COMPLETION_MARKERS_RE) || [];
+  result.completionMarkersFound = [...new Set(markerMatches.map(m=>m.trim()))];
+  const allDims = [];
+  types.forEach(t => (ARTEFACT_ANATOMY_DIMENSIONS[t]||[]).forEach(d => allDims.push({type:t, ...d})));
+  const seen = new Set();
+  const uniqueDims = allDims.filter(d => { const k=d.type+':'+d.label; if(seen.has(k)) return false; seen.add(k); return true; });
+  for(const d of uniqueDims){
+    const entry = d.type+': '+d.label;
+    if(d.re.test(text)) result.dimensionsFound.push(entry);
+    else result.dimensionsMissing.push(entry);
+  }
+  result.coverage = uniqueDims.length ? Math.round((result.dimensionsFound.length/uniqueDims.length)*100)/100 : 1;
+  if(result.completionMarkersFound.length) result.status = 'REQUIRES_INTERNAL_COMPLETION';
+  else if(result.coverage >= 0.8) result.status = 'STRUCTURALLY_COMPLETE';
+  else if(result.coverage >= 0.4) result.status = 'PARTIALLY_POPULATED';
+  else result.status = 'PRESENT';
+  return result;
+}
+
 function buildSystemPrompt(pillar, out){
   pillar = pillar || (exec && exec.pillar) || st.pillar || 'P1';
   const canonical = CANONICAL_PROMPTS[pillar];
@@ -8239,30 +8426,12 @@ FORENSIC MODE — CONDITIONAL: where the SYSTEM PROFILE states prior incidents o
   // (see the closing sentence below) — ceremony without a control behind
   // it is not compliance depth.
   const isCompletenessContractPillar = pillar==='P2A' || pillar==='P2B' || pillar==='P3' || pillar==='P4';
-  const ARTEFACT_MIN_ANATOMY = {
-    SOP_PROCEDURE: 'Purpose; Scope; Definitions; Roles; minimum executable steps (numbered, in sequence) where the artefact involves a process; Triggers; Decision Criteria; Escalation; Evidence/Records; Monitoring; Review; Approval.',
-    MATRIX: 'Defined scales/criteria for every column (state what each value means, not just a column header); a populated structure with real rows for this system — never an empty template; Owner; Decision Consequence (what changes because of a given cell’s value); Evidence Linkage.',
-    REGISTER_LOG: 'Defined fields (named, not just implied); Owner; Retention period; Access/integrity control; Review cadence; usable row/entry rules (what triggers a new entry, in what format).',
-    FORM_TEMPLATE: 'All fields labelled; each field’s mandatory/optional state stated; a completion instruction (who fills it in, when, from what source); an approval/sign-off block where the underlying obligation requires one.',
-    POLICY: 'Purpose; Scope; Principles/Rules (the actual substantive rules, not a restatement of the legal requirement); Responsibilities; Exceptions; Escalation; Monitoring; Review; Approval.',
-    CONTRACT: 'Operative clauses with real obligations and parties/placeholder fields — not a description of what a clause should cover. A clause that only says "this instrument should address X" is a defect, not a clause.',
-    NOTICE: 'The actual deployable notice text a reader would see, in context (timing, placement, audience) — not a description of what a transparency notice should communicate.',
-    DPIA_FRIA: 'A completed assessment structure with real content: description of processing/deployment; necessity and proportionality; risk identification with likelihood/severity; safeguards/mitigations; residual risk; sign-off/review — not a checklist of what a DPIA/FRIA should contain.',
-  };
+  // ARTEFACT_MIN_ANATOMY and the type-detection heuristic now live as
+  // shared top-level definitions (just above CORE_P1_CLASSIFICATION_CODES)
+  // — reused as-is by Step 4's assessArtefactCompleteness so the prompt
+  // and the post-generation validator can never silently drift apart.
   const artefactCompletenessContract = (!isCompletenessContractPillar || isMachineReadableExport) ? '' : (function(){
-    const probe = (String((out&&out.title)||'')+' '+String((out&&out.cat)||'')).toLowerCase();
-    const types = [];
-    const add=(t,re)=>{ if(re.test(probe)) types.push(t); };
-    add('DPIA_FRIA', /dpia|fria|impact assessment/);
-    add('CONTRACT', /contract|instrument|agreement|declaration|\bdpa\b/);
-    add('NOTICE', /notice|disclosure|notification|\blabel\b|marking/);
-    add('MATRIX', /matrix|dashboard|scorecard|\bmap\b/);
-    add('REGISTER_LOG', /register|\blog\b|logging|record|trail|audit/);
-    add('FORM_TEMPLATE', /\bform\b|template|checklist/);
-    add('POLICY', /policy|framework|governance|manual|code of conduct/);
-    add('SOP_PROCEDURE', /procedure|protocol|\bplan\b|\bsop\b|specification|implementation|management|assessment|pathway|instruction/);
-    if(!types.length) types.push('SOP_PROCEDURE');
-    const uniqueTypes = [...new Set(types)];
+    const uniqueTypes = detectArtefactTypes(out);
     const anatomyLines = uniqueTypes.map(t => `- ${t.replace(/_/g,'/')}: ${ARTEFACT_MIN_ANATOMY[t]}`).join('\n');
     return `
 

@@ -17,6 +17,7 @@ python3 tests/verify_mapping_safeguard.py  # CANONICAL SPEC MAPPING FAILURE bloc
 python3 tests/verify_step1_contract.py     # operational artefact completeness contract (P2A/P2B/P3/P4 only, not P1/CSV)
 python3 tests/verify_step2_p0_enrichment.py  # P0 Human Oversight (P2A O08, P2B O09) + FRIA matrix (P2B O06) targeting
 python3 tests/verify_step3_engine_authored_specs.py  # the 8 Step 0 gaps now RESOLVED with real content, incl. all 7 contractual instruments
+python3 tests/verify_step4_completeness_validator.py  # 5-state deterministic completeness classifier, all states + taxonomy consistency
 ```
 
 All need Playwright with a Chromium binary available (see
