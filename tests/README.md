@@ -16,6 +16,7 @@ python3 tests/verify_canonical_mapping.py  # P2A/P2B canonical anchor resolution
 python3 tests/verify_mapping_safeguard.py  # CANONICAL SPEC MAPPING FAILURE blocking-error path
 python3 tests/verify_step1_contract.py     # operational artefact completeness contract (P2A/P2B/P3/P4 only, not P1/CSV)
 python3 tests/verify_step2_p0_enrichment.py  # P0 Human Oversight (P2A O08, P2B O09) + FRIA matrix (P2B O06) targeting
+python3 tests/verify_step3_engine_authored_specs.py  # the 8 Step 0 gaps now RESOLVED with real content, incl. all 7 contractual instruments
 ```
 
 All need Playwright with a Chromium binary available (see

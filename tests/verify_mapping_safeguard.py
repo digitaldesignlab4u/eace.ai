@@ -11,17 +11,23 @@ this safeguard conflated two different conditions):
                           Blocks GENERATION OF THAT OUTPUT ONLY — never the
                           whole pillar's registry or run.
   NO_DEDICATED_SECTION — the catalogue intentionally has no canonical
-                          section for this output yet (the 8 Step-0-audit
-                          gaps). NOT an engine failure, does NOT block
-                          anything, and must NOT read as licence for the
-                          model to invent the missing methodology — the
-                          fallback text must explicitly forbid drafting a
-                          substantive artefact and require a short status
-                          record instead.
+                          section for this output yet. NOT an engine
+                          failure, does NOT block anything, and must NOT
+                          read as licence for the model to invent the
+                          missing methodology — the fallback text must
+                          explicitly forbid drafting a substantive artefact
+                          and require a short status record instead. As of
+                          Step 3, all 8 codes the Step 0 audit found in
+                          this state now have a real ENGINE_AUTHORED_SPECS
+                          entry and resolve RESOLVED — this test exercises
+                          the fallback itself by temporarily removing one
+                          authored entry, since no genuine gap remains in
+                          the live catalogue to point at directly.
 
 Checks, live in a headless browser:
-1. Healthy path: a real anchor (P2A O03) resolves to RESOLVED; a declared
-   gap (P2A O25) returns the non-fabricating status-record fallback and is
+1. Healthy path: a real anchor (P2A O03) resolves to RESOLVED; with P2A
+   O25's Step 3 authored spec temporarily removed (restored immediately
+   after), it returns the non-fabricating status-record fallback and is
    marked NO_DEDICATED_SECTION; zero failures recorded against the real,
    unmodified canonical text.
 2. Failure path: with the P2A O03 anchor header temporarily corrupted
@@ -55,18 +61,31 @@ with sync_playwright() as p:
         page.click("text=ENTER WORKSPACE", timeout=3000)
         page.wait_for_timeout(1000)
 
-    # 1. Real anchors should resolve RESOLVED; declared gaps NO_DEDICATED_SECTION
-    #    with a fallback that explicitly forbids fabricating the artefact.
+    # 1. Real anchors should resolve RESOLVED. All 8 codes that were
+    #    NO_DEDICATED_SECTION at Step 0 now have a Step 3 engine-authored
+    #    spec (ENGINE_AUTHORED_SPECS) and resolve RESOLVED too — so the
+    #    genuine "still a gap" fallback is exercised here by temporarily
+    #    removing one authored entry (ENGINE_AUTHORED_SPECS's outer object
+    #    is frozen, but its inner P2A/P2B objects are plain and mutable —
+    #    this deletes then restores a nested key, it does not touch the
+    #    frozen OUTPUT_CANONICAL_ANCHORS map at all) rather than asserting
+    #    against a code that no longer represents the fallback path.
     r1 = page.evaluate("""() => {
         extractCanonicalOutputBlock('P2A', OUTPUTS.P2A.find(o=>o.code==='O03'));
+        const savedSpec = ENGINE_AUTHORED_SPECS.P2A.O25;
+        delete ENGINE_AUTHORED_SPECS.P2A.O25;
+        delete CANONICAL_SPEC_STATUS['P2A:O25']; // clear cached RESOLVED from earlier in this session
+        const gapText = extractCanonicalOutputBlock('P2A', OUTPUTS.P2A.find(o=>o.code==='O25'));
+        const gapStatus = getCanonicalSpecStatus('P2A','O25');
+        ENGINE_AUTHORED_SPECS.P2A.O25 = savedSpec; // restore — must not leak into later real usage
         return {
           resolved: getCanonicalSpecStatus('P2A','O03'),
-          gap: getCanonicalSpecStatus('P2A','O25'),
-          gapReturnedText: extractCanonicalOutputBlock('P2A', OUTPUTS.P2A.find(o=>o.code==='O25')),
+          gap: gapStatus,
+          gapReturnedText: gapText,
           failuresSoFar: CANONICAL_SPEC_MAPPING_FAILURES.length,
         };
     }""")
-    print("Real-anchor / declared-gap status check:", {k: (v[:80] + '...' if isinstance(v, str) and len(v) > 80 else v) for k, v in r1.items()})
+    print("Real-anchor / simulated-still-a-gap status check:", {k: (v[:80] + '...' if isinstance(v, str) and len(v) > 80 else v) for k, v in r1.items()})
     assert r1["resolved"] == "RESOLVED", r1
     assert r1["gap"] == "NO_DEDICATED_SECTION", r1
     assert "No dedicated canonical specification is currently defined" in r1["gapReturnedText"], r1

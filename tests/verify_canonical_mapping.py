@@ -6,10 +6,13 @@ with that output's real "OUTPUT NN  ·" canonical header (not a fragment of
 the front-matter status-board table, which is what every output used to
 silently resolve to before this fix — see the audit finding in the code
 comment above OUTPUT_CANONICAL_ANCHORS). For every output with a `null`
-entry (no dedicated canonical section exists), it must return the
-non-fabricating "CANONICAL SPECIFICATION STATUS" status record (see
-verify_mapping_safeguard.py for the full three-state contract), not a
-spurious match.
+entry in OUTPUT_CANONICAL_ANCHORS, it must resolve via one of two paths:
+Step 3's ENGINE_AUTHORED_SPECS (now covers all 8 of the codes that were
+null at Step 0 — status RESOLVED, substantive content) or, for any future
+`null` code not yet authored, the non-fabricating "CANONICAL SPECIFICATION
+STATUS" status record (see verify_mapping_safeguard.py for the full
+three-state contract and verify_step3_engine_authored_specs.py for
+instrument-level detail on the 8 authored specs) — never a spurious match.
 
 This is a live-engine check, not a static read of the source — per
 CLAUDE.md's documented discipline on this file, reading the source is not
@@ -71,8 +74,16 @@ def main():
                 )
                 checked += 1
                 if expected_num is None:
-                    if "CANONICAL SPECIFICATION STATUS" not in result or "No dedicated canonical specification is currently defined" not in result:
-                        fails.append(f"{pillar}/{code}: expected non-fabricating status record, got: {result[:80]!r}")
+                    # Step 3 authored real specs for all 8 codes that were
+                    # null at Step 0 — expect RESOLVED + substantive content
+                    # OR (for any future null code with no authored spec
+                    # yet) the non-fabricating status record. Never a
+                    # spurious match against the front-matter status board.
+                    status = page.evaluate(f"() => getCanonicalSpecStatus('{pillar}','{code}')")
+                    is_authored = status == "RESOLVED" and "Legal basis:" in result and len(result) > 500
+                    is_status_record = "CANONICAL SPECIFICATION STATUS" in result and "No dedicated canonical specification is currently defined" in result
+                    if not (is_authored or is_status_record):
+                        fails.append(f"{pillar}/{code}: expected authored spec (RESOLVED) or non-fabricating status record, got status={status!r} text={result[:80]!r}")
                 else:
                     expected_header = f"OUTPUT {expected_num:02d}  ·"
                     if not result.startswith(expected_header) and not result.lstrip().startswith(expected_header):
