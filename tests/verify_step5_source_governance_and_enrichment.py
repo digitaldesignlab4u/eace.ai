@@ -79,6 +79,15 @@ with sync_playwright() as p:
         ("P2B", "O13", "PRIORITY ENRICHMENT — NIS2", True),
         ("P2B", "O19", "PRIORITY ENRICHMENT — SUBSTANTIAL MODIFICATION", True),
         ("P2B", "O21", "PRIORITY ENRICHMENT — SECTOR OVERLAY", True),
+        # Added following the Golden Artefact Acceptance dry-run (static pre-flight
+        # audit): O02 was flagged as "unaudited" — its own spec is an index/skeleton
+        # correctly cross-referencing O03/O04/O07/O08/O09 for 5 of 9 Annex IV
+        # blocks, but Blocks 1/2/3/9 have no other home and needed real depth.
+        ("P2A", "O02", "PRIORITY ENRICHMENT — ANNEX IV DOCUMENTATION SKELETON", True),
+        # O09's canonical spec cites the combined shorthand "Art. 14+26"; this
+        # enrichment requires the model to cite Art. 14 (provider design, inherited)
+        # and Art. 26(5) (the deployer's own oversight-assignment duty) separately.
+        ("P2B", "O09", "Article 26(5)", True),
         # Negative checks: outputs the audit found already strong should get NO priority-enrichment block.
         ("P2A", "O22", "PRIORITY ENRICHMENT", False),
         ("P2A", "O27", "PRIORITY ENRICHMENT", False),
