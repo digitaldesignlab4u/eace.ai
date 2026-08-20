@@ -5993,6 +5993,7 @@ async function execRun(){
       if(banner) banner.style.display='flex';
       const txt=document.getElementById('exec-resume-txt');
       if(txt) txt.textContent=`${out.code} stopped. Completed outputs are preserved. Retry only this output, then continue sequentially.`;
+      showRawErrorPanel(out.rawError);
       renderExecList(); updateExecProgress(); updateCheckpointButton(); saveExecState();
       return;
     }
@@ -6823,6 +6824,21 @@ function execPauseResume(){
     saveExecState();
     logAudit('run','Generation paused at output '+(exec.currentIdx+1),exec.pillar,st.data.sysName||'—');
   }
+}
+
+// Shows/hides the raw-error debug panel on the run screen. content===null
+// (or falsy) hides and clears it; anything else is rendered as text
+// (JSON.stringify'd if it isn't already a string).
+function showRawErrorPanel(content){
+  const el=document.getElementById('exec-raw-error-panel');
+  if(!el) return;
+  if(!content){
+    el.style.display='none';
+    el.textContent='';
+    return;
+  }
+  el.style.display='block';
+  el.textContent=typeof content==='string' ? content : JSON.stringify(content,null,2);
 }
 
 function execResume(){
