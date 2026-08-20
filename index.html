@@ -6155,6 +6155,7 @@ async function callAnthropicForOutput(model, tokenBudget, systemPromptParts, mes
     }
     const e = new Error('Could not reach the Anthropic API. Check the connection and browser CORS permissions.');
     e.raw = { networkError: String(networkErr&&networkErr.message||networkErr) };
+    e.retryable = true; // transient — connection drop, DNS blip, momentary CORS preflight failure
     throw e;
   }
   if(!response.ok){
@@ -6240,14 +6241,37 @@ async function execApiMode(idx, signal){
   out.requestsDispatched++;
   exec.requestsDispatched++;
   let data;
-  try{
-    data=await callAnthropicForOutput(model,tokenBudget,systemPromptParts,messages,configuredKey,signal);
-  }catch(err){
+  // A dispatched-but-failed request (network blip, 429 rate limit, transient
+  // 5xx/529 "overloaded") never produced billable content, so retrying it is
+  // not a second paid generation of the same output — only a genuinely
+  // completed/erroring generation is subject to the one-dispatch guard above.
+  // Without this, any transient Anthropic hiccup permanently stalled the run
+  // at whichever output happened to be in flight, requiring a manual
+  // "Continue from checkpoint" click for something that would have quietly
+  // succeeded a few seconds later.
+  const MAX_TRANSIENT_RETRIES=3;
+  let lastErr=null;
+  for(let attempt=0; attempt<=MAX_TRANSIENT_RETRIES; attempt++){
+    try{
+      data=await callAnthropicForOutput(model,tokenBudget,systemPromptParts,messages,configuredKey,signal);
+      lastErr=null;
+      break;
+    }catch(err){
+      lastErr=err;
+      const canRetry=err && err.retryable && attempt<MAX_TRANSIENT_RETRIES;
+      if(!canRetry) break;
+      const waitMs=Math.min(err.retryAfterMs||(1000*Math.pow(2,attempt)), 20000);
+      out.lastError=`${out.code}: transient error (${err.message}). Auto-retrying (${attempt+1}/${MAX_TRANSIENT_RETRIES}) in ${(waitMs/1000).toFixed(1)}s…`;
+      renderExecList(); updateExecProgress();
+      await sleep(waitMs);
+    }
+  }
+  if(lastErr){
     out.state='error';
-    out.lastError=String(err&&err.message?err.message:err);
-    out.rawError=err&&err.raw?err.raw:null;
+    out.lastError=String(lastErr&&lastErr.message?lastErr.message:lastErr);
+    out.rawError=lastErr&&lastErr.raw?lastErr.raw:null;
     saveExecState();
-    throw err;
+    throw lastErr;
   }
 
   const text=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
@@ -6597,6 +6621,27 @@ Where the system is intended for deployment, provision or use in more than one E
 9. CONSISTENCY PRECEDENCE\nWhere an output specification, legacy canonical text or attachment conflicts with binding official law, this Global Regulatory Governance layer and the binding official law prevail. Where a legacy instruction asks for live web searching, provisional political agreements, unpublished guidance, assumed authorities, invented examples or unsupported standard clauses, ignore that instruction and apply the source-status rules above. Report a material conflict once in a concise Regulatory Consistency Note; do not propagate it through the package.\n===== END GLOBAL REGULATORY GOVERNANCE =====`;
 }
 
+// Resolves which language the artefact BODY must be generated in.
+// The form layer collects language intent under several historically
+// distinct fields (authLang, outputLang as a single preferred-language
+// value, outputLanguages/noticeLanguages as multiselects for Art. 13
+// end-user notices) that have accumulated overlapping ids across P1-P4
+// screens. None of that intent was ever read at generation time — the
+// model received the value only as a passive intake-context fact line
+// ("Output language(s): Croatian"), which describes the SYSTEM being
+// assessed, not an instruction to the model about its own output
+// language, so every artefact silently defaulted to English regardless
+// of what was selected. This resolves the most specific available
+// signal and is the single source of truth consumed by the generation
+// instruction below.
+function resolveDocumentGenerationLanguage(data){
+  data = data || {};
+  const firstOf = v => Array.isArray(v) ? v.find(x=>typeof x==='string'&&x.trim()) : v;
+  const candidates = [data.authLang, firstOf(data.outputLang), firstOf(data.outputLanguages)];
+  const lang = candidates.find(v => typeof v==='string' && v.trim() && v.trim().toLowerCase()!=='other');
+  return lang ? lang.trim() : 'English';
+}
+
 function buildSystemPrompt(pillar, out){
   pillar = pillar || (exec && exec.pillar) || st.pillar || 'P1';
   const canonical = CANONICAL_PROMPTS[pillar];
@@ -6614,7 +6659,10 @@ function buildSystemPrompt(pillar, out){
     ? `This is an ANALYTICAL REGULATORY OUTPUT. Its purpose is classification, legal qualification, applicability assessment, routing and explicit gap identification.`
     : `This is an OPERATIONAL-LEGAL REGULATORY ARTEFACT. It must not stop at legal explanation or gap analysis. It must convert the applicable obligations into usable governance, procedures, responsibilities, decision criteria, workflows, controls, records, templates, evidence requirements, escalation paths and review mechanisms. It should be capable of adoption into a live compliance framework with minimal additional drafting.`;
 
-  const cacheable = `EACE REGULATORY DOCUMENT EXECUTION\nModule: ${canonical.moduleId} · Version: ${canonical.version}\n\nGenerate one complete, standalone and audit-ready regulatory artefact. Use formal EU regulatory and Big Four drafting. Preserve legal precision and operational usefulness. Avoid marketing language, generic AI phrases and filler.\n\n${buildGlobalRegulatoryGovernance(pillar)}`;
+  const docLang = resolveDocumentGenerationLanguage(getExecutionInputData());
+  const languageInstruction = `\n\nLANGUAGE OF GENERATION — MANDATORY:\nGenerate the ENTIRE artefact exclusively in ${docLang}. This includes every heading, section title, body paragraph, table, label and the executive summary. Do not mix languages and do not default to English unless ${docLang} is English. Use precise, professionally accepted ${docLang}-language EU AI Act / regulatory terminology throughout, consistent with the official ${docLang}-language version of Regulation (EU) 2024/1689 and its amendments where an official ${docLang}-language term exists. Retain untranslated only: proper nouns and entity names; the official short title of an EU legal instrument where no established ${docLang} short title exists; verbatim quoted source text where the artefact explicitly quotes the Regulation; and standard legal citations (article/paragraph/Annex numbers, ELI identifiers).`;
+
+  const cacheable = `EACE REGULATORY DOCUMENT EXECUTION\nModule: ${canonical.moduleId} · Version: ${canonical.version}\n\nGenerate one complete, standalone and audit-ready regulatory artefact. Use formal EU regulatory and Big Four drafting. Preserve legal precision and operational usefulness. Avoid marketing language, generic AI phrases and filler.${languageInstruction}\n\n${buildGlobalRegulatoryGovernance(pillar)}`;
 
   const overlayInstruction = ((pillar==='P2A' && (out.code==='O21'||out.code==='21')) || (pillar==='P2B' && (out.code==='O22'||out.code==='22'))) ? `
 
@@ -9489,10 +9537,13 @@ function migrateSysData(old){
     if(dc !== undefined) m.deployerCountryMain = Array.isArray(dc) ? dc[0] : dc;
   }
 
-  // outputLang: if was a string, convert to authLang
+  // outputLang: if was a string (the single-select "Preferred output
+  // language" answer), also copy it to authLang. Previously this DELETED
+  // m.outputLang after copying, which silently destroyed the one signal
+  // resolveDocumentGenerationLanguage() falls back to when authLang is
+  // unset — keep both so the language intent is never lost.
   if(typeof m.outputLang === 'string' && !m.authLang){
     m.authLang = m.outputLang;
-    delete m.outputLang;
   }
 
   // sector: ensure array
@@ -10615,99 +10666,211 @@ function extractAndRecordTrace(sys, out, pillar, content){
 // Shows: Engine decision | Result for each key determination
 // ═══════════════════════════════════════════════════
 
+// Reads Component 1's already-extracted rule/legalConsequence for a given
+// output code, so the dashboard shows the actual generated determination
+// instead of a static "Pending engine run" placeholder once that output
+// has completed. Returns null if the output hasn't been generated (or
+// hasn't been traced) yet, so callers can fall back to their prior text.
+function findDecisionTraceForCode(sys, code){
+  const traces = (sys && sys.decisionTraces) || [];
+  // Traces are appended in generation order; take the most recent one for
+  // this code (a re-run of the same output supersedes an earlier attempt).
+  for(let i=traces.length-1;i>=0;i--){
+    if(traces[i] && traces[i].outputCode===code) return traces[i];
+  }
+  return null;
+}
+// Best-effort, DECORATIVE-ONLY colour hint for a substantive EACE result.
+// This must never gate completion or action-required logic (see
+// findRowState below) and must never hide or reject a legally valid EACE
+// result that isn't one of these phrasings — anything unrecognised simply
+// renders with the neutral/default colour instead of a wrong one. The
+// mapping mirrors EACE's own existing risk-tier palette (RISK_CLASSES /
+// .risk-high /.risk-limited /.risk-minimal and the --status-highrisk
+// token, "High Risk — burnt orange", already distinct from --red used for
+// Article 5 prohibitions) rather than inventing new colour semantics.
+function severityColorFromResultText(text){
+  const t = String(text||'').toLowerCase();
+  // Explicit "no prohibition found" must be checked before the bare
+  // "prohibit" keyword — otherwise a clean/passing result ("no prohibited
+  // practice identified") would be coloured as if a prohibition were
+  // found, which is exactly backwards for the one distinction that most
+  // needs to be right.
+  if(/\bno\s+(art(?:icle)?\.?\s*5\s+)?prohibit|not\s+(a\s+)?prohibit|does not (engage in|constitute|qualify as)[^.]{0,25}prohibit|not classified as[^.]{0,25}prohibit/.test(t)) return 'var(--green)';
+  if(/\bprohibit(ed|ion)|not permitted|art\.?\s*5\(1\)/.test(t)) return 'var(--red)';
+  if(/\bhigh[\s-]risk/.test(t)) return 'var(--status-highrisk)';
+  if(/\blimited[\s-]risk/.test(t)) return 'var(--blue)';
+  if(/\bminimal[\s-]risk/.test(t)) return 'var(--green)';
+  if(/\bexempt|outside (the )?scope|not (in )?scope|does not (fall|apply)/.test(t)) return 'var(--blue)';
+  return null; // no confident signal — render with the default/neutral colour, never block or misclassify
+}
+
 function buildExecutiveDashboard(sys, pillar){
   if(!sys) return '';
   const d    = sys.data || {};
-  const ran  = sys.ran  || {};
   const outs = sys.generatedOutputs || [];
 
-  // Build decision matrix from available data + generated outputs
+  // Every row separates three concepts that must never be conflated:
+  //   decision      — the regulatory question being assessed
+  //   result        — EACE's actual substantive answer, verbatim (never
+  //                    reduced to a generic YES/NO/OK/COMPLIANT vocabulary)
+  //   completed     — has a determination been reached at all, derived
+  //                    purely from whether the underlying data/trace
+  //                    exists — never from parsing what the result SAYS
+  //   actionRequired — a concrete, specific unresolved blocker (missing
+  //                    mandatory input/documentation/control), never
+  //                    inferred merely from a determination being
+  //                    HIGH-RISK, APPLICABLE, TRIGGERED or REQUIRED
+  //
+  // traced(code, fallbackResult, fallbackCompleted): once Component 1 has
+  // extracted a real determination for this output code, that verbatim
+  // text IS the result and the row is completed — full stop, regardless
+  // of what the determination concludes. Before that, fall back to
+  // whatever the intake form alone establishes.
+  const traced = (code, fallbackResult, fallbackCompleted) => {
+    const t = findDecisionTraceForCode(sys, code);
+    return t ? {result: t.legalConsequence, completed: true}
+              : {result: fallbackResult, completed: fallbackCompleted};
+  };
+
+  const t01 = traced('O01', d.noExemption===false?'Exempt from scope':'In scope — Art. 2(1) applies', d.noExemption!==undefined);
+  const t02 = traced('O02', 'Not yet determined', false);
+  const t03 = traced('O03', d.sector?.length?'Pending — see O03':'Not yet determined', false);
+  const t06 = traced('O06', d.gpai===true?`GPAI dependency confirmed — ${d.gpaiModel||'model specified'}`:d.gpai===false?'No GPAI dependency':'Not yet determined', d.gpai!==undefined);
+  const t08 = traced('O08', d.nis2Provider && d.nis2Provider!=='Not classified'?d.nis2Provider:'Not yet determined', !!(d.nis2Provider && d.nis2Provider!=='Not classified'));
+  const t11 = traced('O11', d.r50Interacts===true?'Applicable — notices required':d.r50Interacts===false?'Not applicable':'Not yet determined', d.r50Interacts!==undefined);
+  const t14 = traced('O14', d.gpai&&d.criticality==='HIGH'?'P2A (Provider)':d.criticality==='LOW'?'P4 (Minimal Risk)':'P2A or P3 — see O14', true);
+
+  // Build the decision matrix from available data + generated outputs,
+  // grouped into the categories a reviewer scans for first: is the system
+  // even in scope, is anything outright banned, what tier does it land
+  // in, and what falls out of that classification — before the supporting
+  // cross-cutting regimes and next-step routing. actionRequired is set
+  // only where a concrete input/control/document is genuinely missing —
+  // never merely because an obligation applies.
   const rows = {
     P1: [
-      { decision: 'AI system within scope?',       result: d.noExemption===false ? 'EXEMPT' : 'YES — in scope',  status: d.noExemption===false?'exempt':'yes' },
-      { decision: 'Territorial scope (Art. 2)?',   result: d.countryDeploy?.length ? `YES — ${d.countryDeploy.slice(0,2).join(', ')}${d.countryDeploy.length>2?` +${d.countryDeploy.length-2}`:''}` : 'Pending', status: 'yes' },
-      { decision: 'Prohibited practice (Art. 5)?', result: 'Pending engine run', status: 'pending' },
-      { decision: 'Annex III high-risk?',          result: d.sector?.length ? 'Pending — see O03' : 'Pending', status: 'pending' },
-      { decision: 'GPAI dependency (Art. 25)?',    result: d.gpai===true ? `YES — ${d.gpaiModel||'model specified'}` : d.gpai===false ? 'NO' : 'Pending', status: d.gpai===true?'yes':d.gpai===false?'no':'pending' },
-      { decision: 'Transparency (Art. 50)?',       result: d.r50Interacts===true ? 'YES — notices required' : d.r50Interacts===false ? 'NO' : 'Pending', status: d.r50Interacts===true?'yes':'pending' },
-      { decision: 'Personal data (GDPR)?',         result: d.personalData===true ? 'YES — GDPR applies' : d.personalData===false ? 'NO' : 'Pending', status: d.personalData===true?'yes':d.personalData===false?'no':'pending' },
-      { decision: 'NIS2 applicability?',           result: d.nis2Provider && d.nis2Provider!=='Not classified' ? `YES — ${d.nis2Provider}` : 'Pending', status: 'pending' },
-      { decision: 'Next engine recommended?',      result: d.gpai&&d.criticality==='HIGH'?'P2A (Provider)':d.criticality==='LOW'?'P4 (Minimal Risk)':'P2A or P3 — see O14', status: 'pending' },
+      { group:'Scope & Territorial Application', decision:'AI system within scope?',       ...t01, actionRequired:false },
+      { group:'Scope & Territorial Application', decision:'Territorial scope (Art. 2)?',    result: d.countryDeploy?.length ? `${d.countryDeploy.slice(0,2).join(', ')}${d.countryDeploy.length>2?` +${d.countryDeploy.length-2}`:''}` : 'Not yet determined', completed: !!d.countryDeploy?.length, actionRequired:false },
+      { group:'Prohibited Practices',             decision:'Prohibited practice (Art. 5)?', ...t02, actionRequired: t02.completed && /\bprohibit(ed|ion)|not permitted|art\.?\s*5\(1\)/i.test(t02.result) && !/\bno\s+(art(?:icle)?\.?\s*5\s+)?prohibit|not\s+(a\s+)?prohibit/i.test(t02.result) },
+      { group:'Risk Classification',              decision:'Annex III high-risk classification?', ...t03, actionRequired:false },
+      { group:'Risk Classification',              decision:'GPAI dependency (Art. 25)?',    ...t06, actionRequired:false },
+      { group:'Cross-Cutting Regimes',            decision:'Transparency (Art. 50)?',       ...t11, actionRequired:false },
+      { group:'Cross-Cutting Regimes',            decision:'Personal data (GDPR)?',         result: d.personalData===true ? 'GDPR applies' : d.personalData===false ? 'GDPR does not apply' : 'Not yet determined', completed: d.personalData!==undefined, actionRequired:false },
+      { group:'Cross-Cutting Regimes',            decision:'NIS2 applicability?',           ...t08, actionRequired:false },
+      { group:'Next Steps',                       decision:'Next engine recommended?',      ...t14, actionRequired:false },
     ],
     P2A:[
-      { decision: 'Provider obligations triggered?', result: 'YES — Title III Chapter 2', status: 'yes' },
-      { decision: 'Risk management (Art. 9)?',     result: d.riskMethodology ? `YES — ${d.riskMethodology.slice(0,40)}` : 'Pending', status: 'pending' },
-      { decision: 'Data governance (Art. 10)?',    result: d.dataSources ? 'YES — data governance required' : 'Pending', status: 'pending' },
-      { decision: 'Technical documentation (Art. 11)?', result: d.annexIVRef ? `YES — ${d.annexIVRef}` : 'Required — Annex IV', status: 'yes' },
-      { decision: 'Logging (Art. 12)?',            result: 'YES — automatic logging required', status: 'yes' },
-      { decision: 'Human oversight (Art. 14)?',    result: d.adm===false ? 'YES — human review in place' : 'Required', status: 'pending' },
-      { decision: 'QMS (Art. 17)?',               result: d.qmsStandard ? `YES — ${d.qmsStandard.slice(0,30)}` : 'Required', status: 'pending' },
-      { decision: 'Conformity assessment (Art. 43)?', result: d.conformityRoute || 'Pending — see O12', status: 'pending' },
-      { decision: 'CE marking (Art. 48)?',         result: d.ceMarkingStatus || 'Pending — post conformity', status: 'pending' },
-      { decision: 'P2B handover required?',        result: d.deployerName ? `YES — ${d.deployerName}` : 'YES — deployer to complete P2B', status: 'yes' },
+      { group:'Core Provider Obligations',  decision:'Provider obligations triggered?',      result: 'Triggered — Title III Chapter 2', completed:true, actionRequired:false },
+      { group:'Core Provider Obligations',  decision:'Risk management (Art. 9)?',            result: d.riskMethodology ? d.riskMethodology.slice(0,60) : 'Not yet documented', completed: !!d.riskMethodology, actionRequired: !d.riskMethodology },
+      { group:'Core Provider Obligations',  decision:'Data governance (Art. 10)?',           result: d.dataSources ? 'Data governance framework documented' : 'Not yet documented', completed: !!d.dataSources, actionRequired: !d.dataSources },
+      { group:'Core Provider Obligations',  decision:'Technical documentation (Art. 11)?',   result: d.annexIVRef ? d.annexIVRef : 'Not yet referenced', completed: !!d.annexIVRef, actionRequired: !d.annexIVRef },
+      { group:'Core Provider Obligations',  decision:'Logging (Art. 12)?',                   result: 'Automatic logging implemented', completed:true, actionRequired:false },
+      { group:'Core Provider Obligations',  decision:'Human oversight (Art. 14)?',           result: d.adm===false ? 'Human review in place' : 'Not yet confirmed', completed: d.adm===false, actionRequired: d.adm!==false },
+      { group:'Core Provider Obligations',  decision:'QMS (Art. 17)?',                       result: d.qmsStandard ? d.qmsStandard.slice(0,40) : 'Not yet documented', completed: !!d.qmsStandard, actionRequired: !d.qmsStandard },
+      { group:'Conformity & Market Entry',  decision:'Conformity assessment (Art. 43)?',     result: d.conformityRoute || 'Not yet determined — see O12', completed: !!d.conformityRoute, actionRequired: !d.conformityRoute },
+      { group:'Conformity & Market Entry',  decision:'CE marking (Art. 48)?',                result: d.ceMarkingStatus || 'Not yet available — follows conformity assessment', completed: !!d.ceMarkingStatus, actionRequired:false },
+      { group:'Handover',                   decision:'P2B handover required?',              result: d.deployerName ? `Required — ${d.deployerName}` : 'Required — deployer to complete P2B', completed:true, actionRequired:false },
     ],
     P2B:[
-      { decision: 'Deployer obligations triggered?', result: 'YES — Art. 26', status: 'yes' },
-      { decision: 'P2A provider package received?',  result: d.p2aHandoverRef ? `YES — ${d.p2aHandoverRef}` : 'PENDING — required from provider', status: d.p2aHandoverRef?'yes':'warn' },
-      { decision: 'Intended purpose compliance?',    result: d.deploymentContext ? 'Confirmed' : 'Pending confirmation', status: 'pending' },
-      { decision: 'Human oversight (Art. 26(2))?',  result: d.adm===false ? 'YES — human review implemented' : 'Required', status: 'pending' },
-      { decision: 'FRIA required (Art. 27)?',       result: d.deploymentScale ? 'YES — FRIA required' : 'Assessment pending', status: 'pending' },
-      { decision: 'Monitoring (Art. 26(6))?',       result: 'YES — post-market monitoring required', status: 'yes' },
-      { decision: 'Incident reporting (Art. 73)?',  result: 'YES — serious incident protocol required', status: 'yes' },
-      { decision: 'P3 transparency required?',      result: d.r50Interacts===true ? 'YES — see P3' : 'Assess via P3', status: 'pending' },
+      { group:'Deployer Obligations',            decision:'Deployer obligations triggered?', result: 'Triggered — Art. 26', completed:true, actionRequired:false },
+      { group:'Deployer Obligations',            decision:'P2A provider package received?',  result: d.p2aHandoverRef ? d.p2aHandoverRef : 'Not yet received from provider', completed: !!d.p2aHandoverRef, actionRequired: !d.p2aHandoverRef },
+      { group:'Deployer Obligations',            decision:'Intended purpose compliance?',    result: d.deploymentContext ? 'Confirmed' : 'Not yet confirmed', completed: !!d.deploymentContext, actionRequired:false },
+      { group:'Deployer Obligations',            decision:'Human oversight (Art. 26(2))?',   result: d.adm===false ? 'Human review implemented' : 'Not yet confirmed', completed: d.adm===false, actionRequired: d.adm!==false },
+      { group:'Impact & Risk Assessment',        decision:'FRIA required (Art. 27)?',        result: d.deploymentScale ? 'Required' : 'Applicability not yet assessed', completed: d.deploymentScale!==undefined, actionRequired:false },
+      { group:'Monitoring & Incident Response',  decision:'Monitoring (Art. 26(6))?',        result: 'Post-market monitoring required', completed:true, actionRequired:false },
+      { group:'Monitoring & Incident Response',  decision:'Incident reporting (Art. 73)?',   result: 'Serious-incident protocol required', completed:true, actionRequired:false },
+      { group:'Downstream',                      decision:'P3 transparency required?',       result: d.r50Interacts===true ? 'Required — see P3' : d.r50Interacts===false ? 'Not required' : 'Applicability not yet assessed', completed: d.r50Interacts!==undefined, actionRequired:false },
     ],
     P3:[
-      { decision: 'Art. 50(1) — direct interaction?',  result: d.r50Interacts===true?'YES — notice required':d.r50Interacts===false?'NO':'Inherited from P1', status: d.r50Interacts===true?'yes':d.r50Interacts===false?'no':'pending' },
-      { decision: 'Art. 50(2) — biometric?',          result: d.r50Biometric===true?'YES — disclosure required':d.r50Biometric===false?'NO':'Inherited from P1', status: d.r50Biometric===true?'yes':'no' },
-      { decision: 'Art. 50(3) — emotion recognition?',result: d.r50Emotion===true?'YES — disclosure required':d.r50Emotion===false?'NO':'Inherited from P1', status: d.r50Emotion===true?'yes':'no' },
-      { decision: 'Art. 50(4) — synthetic content?',  result: d.r50Synthetic===true?'YES — watermarking required':d.r50Synthetic===false?'NO':'Inherited from P1', status: d.r50Synthetic===true?'yes':'no' },
-      { decision: 'Notice languages required?',       result: d.noticeLanguages?.length?(Array.isArray(d.noticeLanguages)?d.noticeLanguages.join(', '):d.noticeLanguages):'As per deployment countries', status: 'pending' },
+      { group:'Article 50 Transparency Triggers', decision:'Art. 50(1) — direct interaction?',   result: d.r50Interacts===true?'Applicable — notice required':d.r50Interacts===false?'Not applicable':'Inherited from P1 — not yet assessed', completed: d.r50Interacts!==undefined, actionRequired:false },
+      { group:'Article 50 Transparency Triggers', decision:'Art. 50(2) — biometric?',            result: d.r50Biometric===true?'Applicable — disclosure required':d.r50Biometric===false?'Not applicable':'Inherited from P1 — not yet assessed', completed: d.r50Biometric!==undefined, actionRequired:false },
+      { group:'Article 50 Transparency Triggers', decision:'Art. 50(3) — emotion recognition?',  result: d.r50Emotion===true?'Applicable — disclosure required':d.r50Emotion===false?'Not applicable':'Inherited from P1 — not yet assessed', completed: d.r50Emotion!==undefined, actionRequired:false },
+      { group:'Article 50 Transparency Triggers', decision:'Art. 50(4) — synthetic content?',    result: d.r50Synthetic===true?'Applicable — watermarking required':d.r50Synthetic===false?'Not applicable':'Inherited from P1 — not yet assessed', completed: d.r50Synthetic!==undefined, actionRequired:false },
+      { group:'Implementation',                   decision:'Notice languages required?',         result: d.noticeLanguages?.length?(Array.isArray(d.noticeLanguages)?d.noticeLanguages.join(', '):d.noticeLanguages):'Not yet determined — defaults to deployment countries', completed: !!d.noticeLanguages?.length, actionRequired:false },
     ],
     P4:[
-      { decision: 'Minimal risk confirmed?',        result: 'YES — voluntary code of conduct applies', status: 'yes' },
-      { decision: 'Transparency (Art. 50)?',        result: d.r50Interacts===true?'YES — notices required':'NO — below threshold', status: d.r50Interacts===true?'yes':'no' },
-      { decision: 'Art. 5 prohibited?',            result: 'NO — confirmed by P1 routing', status: 'no' },
-      { decision: 'Voluntary measures recommended?',result: 'YES — see output package', status: 'yes' },
+      { group:'Classification Confirmation', decision:'Minimal risk confirmed?',         result: 'Minimal risk — voluntary code of conduct applies', completed:true, actionRequired:false },
+      { group:'Classification Confirmation', decision:'Art. 5 prohibited?',              result: 'Not prohibited — confirmed by P1 routing', completed:true, actionRequired:false },
+      { group:'Voluntary Governance',        decision:'Transparency (Art. 50)?',         result: d.r50Interacts===true?'Applicable — notices required':'Not applicable — below threshold', completed: d.r50Interacts!==undefined, actionRequired:false },
+      { group:'Voluntary Governance',        decision:'Voluntary measures recommended?', result: 'Yes — see output package', completed:true, actionRequired:false },
     ],
   };
 
   const pillarRows = rows[pillar] || [];
-  const statusColor = { yes:'var(--green)', no:'var(--faint)', pending:'var(--gold-2)', warn:'var(--red)', exempt:'var(--blue-2)' };
+  const pillarLabel = {P1:'Classification',P2A:'Provider',P2B:'Deployer',P3:'Transparency',P4:'Minimal Risk'}[pillar] || pillar;
+
+  // Workflow/action colour is a SEPARATE axis from the substantive result
+  // colour above: it reflects whether THIS row still needs something,
+  // never what the row's regulatory conclusion happens to be.
+  const rowAccentColor = row => row.actionRequired ? 'var(--red)'
+                                : !row.completed ? 'var(--status-progress)'
+                                : (severityColorFromResultText(row.result) || 'var(--border-3)');
+  const rowTag = row => row.actionRequired ? {label:'ACTION REQUIRED', color:'var(--red)'}
+                       : !row.completed ? {label:'IN PROGRESS', color:'var(--status-progress)'}
+                       : null; // a completed, non-blocking row needs no workflow tag — the result itself is the information
+
+  // Overall pillar readiness: ACTION REQUIRED outranks IN PROGRESS, which
+  // outranks COMPLETE — a reviewer scanning only this one badge must see
+  // the most demanding true state, never an average. Per spec: COMPLETE
+  // means every determination this dashboard represents is reached AND
+  // no mandatory outstanding action remains; IN PROGRESS means a
+  // determination/input is still outstanding with no specific blocker
+  // flagged yet; ACTION REQUIRED means a concrete unresolved action exists.
+  const hasActionRequired = pillarRows.some(r=>r.actionRequired);
+  const hasIncomplete     = pillarRows.some(r=>!r.completed);
+  const overall = hasActionRequired ? {label:'ACTION REQUIRED', color:'var(--red)'}
+                : hasIncomplete ? {label:'IN PROGRESS', color:'var(--status-progress)'}
+                : {label:'COMPLETE', color:'var(--green)'};
+
+  const completedCount = pillarRows.filter(r=>r.completed).length;
+  const actionCount    = pillarRows.filter(r=>r.actionRequired).length;
+  const docsCount       = outs.filter(o=>o.state==='done'||o.state==='complete').length;
+
+  // Group rows in first-seen order so each pillar's own category sequence
+  // (defined above) drives the layout, not object-key iteration order.
+  const groupOrder = [];
+  pillarRows.forEach(r=>{ if(!groupOrder.includes(r.group)) groupOrder.push(r.group); });
+
+  const kpiTile = (label, value, color) => `
+    <div style="flex:1;min-width:110px;background:var(--panel-2);border:0.5px solid var(--border-2);border-radius:var(--radius-sm);padding:10px 14px;">
+      <div style="font-family:var(--font-mono),monospace;font-size:8px;letter-spacing:0.1em;text-transform:uppercase;color:var(--faint);margin-bottom:4px;">${esc(label)}</div>
+      <div style="font-family:'Playfair Display',serif;font-size:19px;color:${color||'var(--ink)'};">${esc(String(value))}</div>
+    </div>`;
 
   let html = `
-  <div style="background:var(--panel);border:0.5px solid var(--border-2);border-radius:var(--radius-md);padding:20px 24px;margin-bottom:20px;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+  <div style="background:var(--panel);border:0.5px solid var(--border-2);border-radius:var(--radius-md);padding:22px 26px;margin-bottom:20px;">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px;flex-wrap:wrap;">
       <div>
         <div style="font-family:var(--font-mono),monospace;font-size:8.5px;letter-spacing:0.14em;text-transform:uppercase;color:var(--gold-2);margin-bottom:3px;">Executive Decision Dashboard</div>
-        <div style="font-family:'Playfair Display',serif;font-size:18px;color:var(--ink);">${esc(sys.name||'AI System')} &mdash; ${pillar}</div>
-        <div style="font-size:11.5px;color:var(--muted);margin-top:2px;">${esc(d.sysDesc?d.sysDesc.slice(0,100)+(d.sysDesc.length>100?'...':''):'')}</div>
+        <div style="font-family:'Playfair Display',serif;font-size:19px;color:var(--ink);">${esc(sys.name||'AI System')} &mdash; ${pillar} <span style="color:var(--muted);font-size:14px;">(${esc(pillarLabel)})</span></div>
+        <div style="font-size:11.5px;color:var(--muted);margin-top:2px;max-width:520px;">${esc(d.sysDesc?d.sysDesc.slice(0,140)+(d.sysDesc.length>140?'...':''):'')}</div>
       </div>
-      <div style="text-align:right;font-family:var(--font-mono),monospace;font-size:9px;color:var(--faint);">
-        ${new Date().toISOString().slice(0,10)}<br>
-        EACE v1.0
+      <div style="text-align:right;flex-shrink:0;">
+        <div style="display:inline-block;font-family:var(--font-mono),monospace;font-size:9.5px;font-weight:600;letter-spacing:0.06em;color:${overall.color};border:1px solid ${overall.color};border-radius:var(--radius-sm);padding:4px 10px;margin-bottom:6px;">${overall.label}</div>
+        <div style="font-family:var(--font-mono),monospace;font-size:9px;color:var(--faint);">${new Date().toISOString().slice(0,10)} &middot; EACE v1.0</div>
       </div>
     </div>
-    <table style="width:100%;border-collapse:collapse;font-size:12px;">
-      <thead>
-        <tr style="border-bottom:0.5px solid var(--border-2);">
-          <th style="text-align:left;padding:6px 8px;font-family:var(--font-mono),monospace;font-size:8px;letter-spacing:0.1em;text-transform:uppercase;color:var(--faint);font-weight:400;">Engine Decision</th>
-          <th style="text-align:left;padding:6px 8px;font-family:var(--font-mono),monospace;font-size:8px;letter-spacing:0.1em;text-transform:uppercase;color:var(--faint);font-weight:400;">Result</th>
-          <th style="width:60px;text-align:center;padding:6px 8px;font-family:var(--font-mono),monospace;font-size:8px;letter-spacing:0.1em;text-transform:uppercase;color:var(--faint);font-weight:400;">Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${pillarRows.map((row,i)=>`
-        <tr style="border-bottom:0.5px solid var(--border);${i%2===0?'background:rgba(255,255,255,0.01)':''}">
-          <td style="padding:7px 8px;color:var(--muted);">${esc(row.decision)}</td>
-          <td style="padding:7px 8px;color:var(--ink);">${esc(row.result)}</td>
-          <td style="padding:7px 8px;text-align:center;">
-            <span style="font-family:var(--font-mono),monospace;font-size:8.5px;font-weight:600;color:${statusColor[row.status]||'var(--faint)'};">
-              ${row.status==='yes'?'YES':row.status==='no'?'NO':row.status==='warn'?'WARN':row.status==='exempt'?'EXEMPT':'TBD'}
-            </span>
-          </td>
-        </tr>`).join('')}
-      </tbody>
-    </table>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">
+      ${kpiTile('Determinations completed', `${completedCount} / ${pillarRows.length}`)}
+      ${kpiTile('Documents generated', docsCount)}
+      ${kpiTile('Actions required', actionCount, actionCount?'var(--red)':'var(--ink)')}
+    </div>
+    ${groupOrder.map(group=>`
+    <div style="margin-bottom:14px;">
+      <div style="font-family:var(--font-mono),monospace;font-size:8px;letter-spacing:0.12em;text-transform:uppercase;color:var(--faint);padding-bottom:5px;margin-bottom:6px;border-bottom:0.5px solid var(--border-2);">${esc(group)}</div>
+      ${pillarRows.filter(r=>r.group===group).map(row=>{
+        const accent = rowAccentColor(row);
+        const tag = rowTag(row);
+        return `
+      <div style="display:flex;align-items:flex-start;gap:10px;padding:7px 4px;border-left:2px solid ${accent};padding-left:10px;margin-bottom:4px;">
+        <div style="flex:1;min-width:0;">
+          <div style="color:var(--muted);font-size:11.5px;">${esc(row.decision)}</div>
+          <div style="color:${row.completed?'var(--ink)':'var(--faint)'};font-size:12px;font-weight:${row.completed?600:400};margin-top:1px;">${esc(row.result)}</div>
+        </div>
+        ${tag ? `<span style="font-family:var(--font-mono),monospace;font-size:8.5px;font-weight:600;color:${tag.color};flex-shrink:0;padding-top:1px;white-space:nowrap;">${tag.label}</span>` : ''}
+      </div>`;}).join('')}
+    </div>`).join('')}
   </div>`;
   return html;
 }
