@@ -6621,6 +6621,27 @@ Where the system is intended for deployment, provision or use in more than one E
 9. CONSISTENCY PRECEDENCE\nWhere an output specification, legacy canonical text or attachment conflicts with binding official law, this Global Regulatory Governance layer and the binding official law prevail. Where a legacy instruction asks for live web searching, provisional political agreements, unpublished guidance, assumed authorities, invented examples or unsupported standard clauses, ignore that instruction and apply the source-status rules above. Report a material conflict once in a concise Regulatory Consistency Note; do not propagate it through the package.\n===== END GLOBAL REGULATORY GOVERNANCE =====`;
 }
 
+// Resolves which language the artefact BODY must be generated in.
+// The form layer collects language intent under several historically
+// distinct fields (authLang, outputLang as a single preferred-language
+// value, outputLanguages/noticeLanguages as multiselects for Art. 13
+// end-user notices) that have accumulated overlapping ids across P1-P4
+// screens. None of that intent was ever read at generation time — the
+// model received the value only as a passive intake-context fact line
+// ("Output language(s): Croatian"), which describes the SYSTEM being
+// assessed, not an instruction to the model about its own output
+// language, so every artefact silently defaulted to English regardless
+// of what was selected. This resolves the most specific available
+// signal and is the single source of truth consumed by the generation
+// instruction below.
+function resolveDocumentGenerationLanguage(data){
+  data = data || {};
+  const firstOf = v => Array.isArray(v) ? v.find(x=>typeof x==='string'&&x.trim()) : v;
+  const candidates = [data.authLang, firstOf(data.outputLang), firstOf(data.outputLanguages)];
+  const lang = candidates.find(v => typeof v==='string' && v.trim() && v.trim().toLowerCase()!=='other');
+  return lang ? lang.trim() : 'English';
+}
+
 function buildSystemPrompt(pillar, out){
   pillar = pillar || (exec && exec.pillar) || st.pillar || 'P1';
   const canonical = CANONICAL_PROMPTS[pillar];
@@ -6638,7 +6659,10 @@ function buildSystemPrompt(pillar, out){
     ? `This is an ANALYTICAL REGULATORY OUTPUT. Its purpose is classification, legal qualification, applicability assessment, routing and explicit gap identification.`
     : `This is an OPERATIONAL-LEGAL REGULATORY ARTEFACT. It must not stop at legal explanation or gap analysis. It must convert the applicable obligations into usable governance, procedures, responsibilities, decision criteria, workflows, controls, records, templates, evidence requirements, escalation paths and review mechanisms. It should be capable of adoption into a live compliance framework with minimal additional drafting.`;
 
-  const cacheable = `EACE REGULATORY DOCUMENT EXECUTION\nModule: ${canonical.moduleId} · Version: ${canonical.version}\n\nGenerate one complete, standalone and audit-ready regulatory artefact. Use formal EU regulatory and Big Four drafting. Preserve legal precision and operational usefulness. Avoid marketing language, generic AI phrases and filler.\n\n${buildGlobalRegulatoryGovernance(pillar)}`;
+  const docLang = resolveDocumentGenerationLanguage(getExecutionInputData());
+  const languageInstruction = `\n\nLANGUAGE OF GENERATION — MANDATORY:\nGenerate the ENTIRE artefact exclusively in ${docLang}. This includes every heading, section title, body paragraph, table, label and the executive summary. Do not mix languages and do not default to English unless ${docLang} is English. Use precise, professionally accepted ${docLang}-language EU AI Act / regulatory terminology throughout, consistent with the official ${docLang}-language version of Regulation (EU) 2024/1689 and its amendments where an official ${docLang}-language term exists. Retain untranslated only: proper nouns and entity names; the official short title of an EU legal instrument where no established ${docLang} short title exists; verbatim quoted source text where the artefact explicitly quotes the Regulation; and standard legal citations (article/paragraph/Annex numbers, ELI identifiers).`;
+
+  const cacheable = `EACE REGULATORY DOCUMENT EXECUTION\nModule: ${canonical.moduleId} · Version: ${canonical.version}\n\nGenerate one complete, standalone and audit-ready regulatory artefact. Use formal EU regulatory and Big Four drafting. Preserve legal precision and operational usefulness. Avoid marketing language, generic AI phrases and filler.${languageInstruction}\n\n${buildGlobalRegulatoryGovernance(pillar)}`;
 
   const overlayInstruction = ((pillar==='P2A' && (out.code==='O21'||out.code==='21')) || (pillar==='P2B' && (out.code==='O22'||out.code==='22'))) ? `
 
@@ -9513,10 +9537,13 @@ function migrateSysData(old){
     if(dc !== undefined) m.deployerCountryMain = Array.isArray(dc) ? dc[0] : dc;
   }
 
-  // outputLang: if was a string, convert to authLang
+  // outputLang: if was a string (the single-select "Preferred output
+  // language" answer), also copy it to authLang. Previously this DELETED
+  // m.outputLang after copying, which silently destroyed the one signal
+  // resolveDocumentGenerationLanguage() falls back to when authLang is
+  // unset — keep both so the language intent is never lost.
   if(typeof m.outputLang === 'string' && !m.authLang){
     m.authLang = m.outputLang;
-    delete m.outputLang;
   }
 
   // sector: ensure array
@@ -10639,19 +10666,56 @@ function extractAndRecordTrace(sys, out, pillar, content){
 // Shows: Engine decision | Result for each key determination
 // ═══════════════════════════════════════════════════
 
+// Reads Component 1's already-extracted rule/legalConsequence for a given
+// output code, so the dashboard shows the actual generated determination
+// instead of a static "Pending engine run" placeholder once that output
+// has completed. Returns null if the output hasn't been generated (or
+// hasn't been traced) yet, so callers can fall back to their prior text.
+function findDecisionTraceForCode(sys, code){
+  const traces = (sys && sys.decisionTraces) || [];
+  // Traces are appended in generation order; take the most recent one for
+  // this code (a re-run of the same output supersedes an earlier attempt).
+  for(let i=traces.length-1;i>=0;i--){
+    if(traces[i] && traces[i].outputCode===code) return traces[i];
+  }
+  return null;
+}
+// Classifies a generated legal-consequence sentence into a dashboard
+// status. Deliberately conservative: only the clearest, most common
+// determination phrasings map to a definite status — anything else
+// falls through to 'yes' (a determination WAS reached and is shown in
+// full; 'yes' here just means "resolved", not "in scope"/"prohibited").
+function statusFromConsequenceText(text){
+  const t = String(text||'').toLowerCase();
+  // An explicit "no prohibition found" finding must be checked before the
+  // bare "prohibit" keyword match below — otherwise a clean/passing result
+  // ("no prohibited practice identified") gets flagged as if a prohibition
+  // WAS found, which is exactly backwards for the one status that most
+  // needs to be right.
+  if(/\bno\s+(art(?:icle)?\.?\s*5\s+)?prohibit|not\s+(a\s+)?prohibit|does not (engage in|constitute|qualify as)[^.]{0,25}prohibit|not classified as[^.]{0,25}prohibit/.test(t)) return 'no';
+  if(/\bexempt|does not (fall|apply)|outside (the )?scope|not (in )?scope/.test(t)) return 'exempt';
+  if(/\bprohibit(ed|ion)|not permitted|art\.?\s*5\(1\)/.test(t)) return 'warn';
+  if(/\bno[\s.,]|not applicable|not triggered|not required/.test(t)) return 'no';
+  return 'yes';
+}
+
 function buildExecutiveDashboard(sys, pillar){
   if(!sys) return '';
   const d    = sys.data || {};
   const ran  = sys.ran  || {};
   const outs = sys.generatedOutputs || [];
 
+  const traceO01 = findDecisionTraceForCode(sys,'O01'); // Territorial scope assessment
+  const traceO02 = findDecisionTraceForCode(sys,'O02'); // Prohibited practice check
+  const traceO03 = findDecisionTraceForCode(sys,'O03'); // Annex III point-by-point evaluation
+
   // Build decision matrix from available data + generated outputs
   const rows = {
     P1: [
-      { decision: 'AI system within scope?',       result: d.noExemption===false ? 'EXEMPT' : 'YES — in scope',  status: d.noExemption===false?'exempt':'yes' },
+      { decision: 'AI system within scope?',       result: traceO01 ? traceO01.legalConsequence : (d.noExemption===false ? 'EXEMPT' : 'YES — in scope'),  status: traceO01 ? statusFromConsequenceText(traceO01.legalConsequence) : (d.noExemption===false?'exempt':'yes') },
       { decision: 'Territorial scope (Art. 2)?',   result: d.countryDeploy?.length ? `YES — ${d.countryDeploy.slice(0,2).join(', ')}${d.countryDeploy.length>2?` +${d.countryDeploy.length-2}`:''}` : 'Pending', status: 'yes' },
-      { decision: 'Prohibited practice (Art. 5)?', result: 'Pending engine run', status: 'pending' },
-      { decision: 'Annex III high-risk?',          result: d.sector?.length ? 'Pending — see O03' : 'Pending', status: 'pending' },
+      { decision: 'Prohibited practice (Art. 5)?', result: traceO02 ? traceO02.legalConsequence : 'Pending engine run', status: traceO02 ? statusFromConsequenceText(traceO02.legalConsequence) : 'pending' },
+      { decision: 'Annex III high-risk?',          result: traceO03 ? traceO03.legalConsequence : (d.sector?.length ? 'Pending — see O03' : 'Pending'), status: traceO03 ? statusFromConsequenceText(traceO03.legalConsequence) : 'pending' },
       { decision: 'GPAI dependency (Art. 25)?',    result: d.gpai===true ? `YES — ${d.gpaiModel||'model specified'}` : d.gpai===false ? 'NO' : 'Pending', status: d.gpai===true?'yes':d.gpai===false?'no':'pending' },
       { decision: 'Transparency (Art. 50)?',       result: d.r50Interacts===true ? 'YES — notices required' : d.r50Interacts===false ? 'NO' : 'Pending', status: d.r50Interacts===true?'yes':'pending' },
       { decision: 'Personal data (GDPR)?',         result: d.personalData===true ? 'YES — GDPR applies' : d.personalData===false ? 'NO' : 'Pending', status: d.personalData===true?'yes':d.personalData===false?'no':'pending' },
