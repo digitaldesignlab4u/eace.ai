@@ -10680,23 +10680,29 @@ function findDecisionTraceForCode(sys, code){
   }
   return null;
 }
-// Classifies a generated legal-consequence sentence into a dashboard
-// status. Deliberately conservative: only the clearest, most common
-// determination phrasings map to a definite status — anything else
-// falls through to 'yes' (a determination WAS reached and is shown in
-// full; 'yes' here just means "resolved", not "in scope"/"prohibited").
-function statusFromConsequenceText(text){
+// Best-effort, DECORATIVE-ONLY colour hint for a substantive EACE result.
+// This must never gate completion or action-required logic (see
+// findRowState below) and must never hide or reject a legally valid EACE
+// result that isn't one of these phrasings — anything unrecognised simply
+// renders with the neutral/default colour instead of a wrong one. The
+// mapping mirrors EACE's own existing risk-tier palette (RISK_CLASSES /
+// .risk-high /.risk-limited /.risk-minimal and the --status-highrisk
+// token, "High Risk — burnt orange", already distinct from --red used for
+// Article 5 prohibitions) rather than inventing new colour semantics.
+function severityColorFromResultText(text){
   const t = String(text||'').toLowerCase();
-  // An explicit "no prohibition found" finding must be checked before the
-  // bare "prohibit" keyword match below — otherwise a clean/passing result
-  // ("no prohibited practice identified") gets flagged as if a prohibition
-  // WAS found, which is exactly backwards for the one status that most
+  // Explicit "no prohibition found" must be checked before the bare
+  // "prohibit" keyword — otherwise a clean/passing result ("no prohibited
+  // practice identified") would be coloured as if a prohibition were
+  // found, which is exactly backwards for the one distinction that most
   // needs to be right.
-  if(/\bno\s+(art(?:icle)?\.?\s*5\s+)?prohibit|not\s+(a\s+)?prohibit|does not (engage in|constitute|qualify as)[^.]{0,25}prohibit|not classified as[^.]{0,25}prohibit/.test(t)) return 'no';
-  if(/\bexempt|does not (fall|apply)|outside (the )?scope|not (in )?scope/.test(t)) return 'exempt';
-  if(/\bprohibit(ed|ion)|not permitted|art\.?\s*5\(1\)/.test(t)) return 'warn';
-  if(/\bno[\s.,]|not applicable|not triggered|not required/.test(t)) return 'no';
-  return 'yes';
+  if(/\bno\s+(art(?:icle)?\.?\s*5\s+)?prohibit|not\s+(a\s+)?prohibit|does not (engage in|constitute|qualify as)[^.]{0,25}prohibit|not classified as[^.]{0,25}prohibit/.test(t)) return 'var(--green)';
+  if(/\bprohibit(ed|ion)|not permitted|art\.?\s*5\(1\)/.test(t)) return 'var(--red)';
+  if(/\bhigh[\s-]risk/.test(t)) return 'var(--status-highrisk)';
+  if(/\blimited[\s-]risk/.test(t)) return 'var(--blue)';
+  if(/\bminimal[\s-]risk/.test(t)) return 'var(--green)';
+  if(/\bexempt|outside (the )?scope|not (in )?scope|does not (fall|apply)/.test(t)) return 'var(--blue)';
+  return null; // no confident signal — render with the default/neutral colour, never block or misclassify
 }
 
 function buildExecutiveDashboard(sys, pillar){
@@ -10704,96 +10710,122 @@ function buildExecutiveDashboard(sys, pillar){
   const d    = sys.data || {};
   const outs = sys.generatedOutputs || [];
 
-  // traced(code, fallbackResult, fallbackStatus): if Component 1 has already
-  // extracted a real determination for this output code, use it (and derive
-  // status from its own text); otherwise fall back to whatever could be
-  // inferred from the intake form alone, so a row is never blank before the
-  // corresponding output has run.
-  const traced = (code, fallbackResult, fallbackStatus) => {
+  // Every row separates three concepts that must never be conflated:
+  //   decision      — the regulatory question being assessed
+  //   result        — EACE's actual substantive answer, verbatim (never
+  //                    reduced to a generic YES/NO/OK/COMPLIANT vocabulary)
+  //   completed     — has a determination been reached at all, derived
+  //                    purely from whether the underlying data/trace
+  //                    exists — never from parsing what the result SAYS
+  //   actionRequired — a concrete, specific unresolved blocker (missing
+  //                    mandatory input/documentation/control), never
+  //                    inferred merely from a determination being
+  //                    HIGH-RISK, APPLICABLE, TRIGGERED or REQUIRED
+  //
+  // traced(code, fallbackResult, fallbackCompleted): once Component 1 has
+  // extracted a real determination for this output code, that verbatim
+  // text IS the result and the row is completed — full stop, regardless
+  // of what the determination concludes. Before that, fall back to
+  // whatever the intake form alone establishes.
+  const traced = (code, fallbackResult, fallbackCompleted) => {
     const t = findDecisionTraceForCode(sys, code);
-    return t ? {result: t.legalConsequence, status: statusFromConsequenceText(t.legalConsequence)}
-              : {result: fallbackResult, status: fallbackStatus};
+    return t ? {result: t.legalConsequence, completed: true}
+              : {result: fallbackResult, completed: fallbackCompleted};
   };
 
-  const t01 = traced('O01', d.noExemption===false?'EXEMPT':'YES — in scope', d.noExemption===false?'exempt':'yes');
-  const t02 = traced('O02', 'Pending engine run', 'pending');
-  const t03 = traced('O03', d.sector?.length?'Pending — see O03':'Pending', 'pending');
-  const t06 = traced('O06', d.gpai===true?`YES — ${d.gpaiModel||'model specified'}`:d.gpai===false?'NO':'Pending', d.gpai===true?'yes':d.gpai===false?'no':'pending');
-  const t08 = traced('O08', d.nis2Provider && d.nis2Provider!=='Not classified'?`YES — ${d.nis2Provider}`:'Pending', (d.nis2Provider && d.nis2Provider!=='Not classified')?'yes':'pending');
-  const t11 = traced('O11', d.r50Interacts===true?'YES — notices required':d.r50Interacts===false?'NO':'Pending', d.r50Interacts===true?'yes':'pending');
-  const t14 = traced('O14', d.gpai&&d.criticality==='HIGH'?'P2A (Provider)':d.criticality==='LOW'?'P4 (Minimal Risk)':'P2A or P3 — see O14', 'pending');
+  const t01 = traced('O01', d.noExemption===false?'Exempt from scope':'In scope — Art. 2(1) applies', d.noExemption!==undefined);
+  const t02 = traced('O02', 'Not yet determined', false);
+  const t03 = traced('O03', d.sector?.length?'Pending — see O03':'Not yet determined', false);
+  const t06 = traced('O06', d.gpai===true?`GPAI dependency confirmed — ${d.gpaiModel||'model specified'}`:d.gpai===false?'No GPAI dependency':'Not yet determined', d.gpai!==undefined);
+  const t08 = traced('O08', d.nis2Provider && d.nis2Provider!=='Not classified'?d.nis2Provider:'Not yet determined', !!(d.nis2Provider && d.nis2Provider!=='Not classified'));
+  const t11 = traced('O11', d.r50Interacts===true?'Applicable — notices required':d.r50Interacts===false?'Not applicable':'Not yet determined', d.r50Interacts!==undefined);
+  const t14 = traced('O14', d.gpai&&d.criticality==='HIGH'?'P2A (Provider)':d.criticality==='LOW'?'P4 (Minimal Risk)':'P2A or P3 — see O14', true);
 
-  // Build decision matrix from available data + generated outputs, grouped
-  // into the categories a reviewer actually scans for first: is the system
-  // even in scope, is anything outright banned, what tier does it land in,
-  // and what falls out of that classification — before the supporting
-  // cross-cutting regimes and next-step routing.
+  // Build the decision matrix from available data + generated outputs,
+  // grouped into the categories a reviewer scans for first: is the system
+  // even in scope, is anything outright banned, what tier does it land
+  // in, and what falls out of that classification — before the supporting
+  // cross-cutting regimes and next-step routing. actionRequired is set
+  // only where a concrete input/control/document is genuinely missing —
+  // never merely because an obligation applies.
   const rows = {
     P1: [
-      { group:'Scope & Territorial Application', decision:'AI system within scope?',       ...t01 },
-      { group:'Scope & Territorial Application', decision:'Territorial scope (Art. 2)?',    result: d.countryDeploy?.length ? `YES — ${d.countryDeploy.slice(0,2).join(', ')}${d.countryDeploy.length>2?` +${d.countryDeploy.length-2}`:''}` : 'Pending', status: 'yes' },
-      { group:'Prohibited Practices',             decision:'Prohibited practice (Art. 5)?', ...t02 },
-      { group:'Risk Classification',              decision:'Annex III high-risk?',          ...t03 },
-      { group:'Risk Classification',              decision:'GPAI dependency (Art. 25)?',    ...t06 },
-      { group:'Cross-Cutting Regimes',            decision:'Transparency (Art. 50)?',       ...t11 },
-      { group:'Cross-Cutting Regimes',            decision:'Personal data (GDPR)?',         result: d.personalData===true ? 'YES — GDPR applies' : d.personalData===false ? 'NO' : 'Pending', status: d.personalData===true?'yes':d.personalData===false?'no':'pending' },
-      { group:'Cross-Cutting Regimes',            decision:'NIS2 applicability?',           ...t08 },
-      { group:'Next Steps',                       decision:'Next engine recommended?',      ...t14 },
+      { group:'Scope & Territorial Application', decision:'AI system within scope?',       ...t01, actionRequired:false },
+      { group:'Scope & Territorial Application', decision:'Territorial scope (Art. 2)?',    result: d.countryDeploy?.length ? `${d.countryDeploy.slice(0,2).join(', ')}${d.countryDeploy.length>2?` +${d.countryDeploy.length-2}`:''}` : 'Not yet determined', completed: !!d.countryDeploy?.length, actionRequired:false },
+      { group:'Prohibited Practices',             decision:'Prohibited practice (Art. 5)?', ...t02, actionRequired: t02.completed && /\bprohibit(ed|ion)|not permitted|art\.?\s*5\(1\)/i.test(t02.result) && !/\bno\s+(art(?:icle)?\.?\s*5\s+)?prohibit|not\s+(a\s+)?prohibit/i.test(t02.result) },
+      { group:'Risk Classification',              decision:'Annex III high-risk classification?', ...t03, actionRequired:false },
+      { group:'Risk Classification',              decision:'GPAI dependency (Art. 25)?',    ...t06, actionRequired:false },
+      { group:'Cross-Cutting Regimes',            decision:'Transparency (Art. 50)?',       ...t11, actionRequired:false },
+      { group:'Cross-Cutting Regimes',            decision:'Personal data (GDPR)?',         result: d.personalData===true ? 'GDPR applies' : d.personalData===false ? 'GDPR does not apply' : 'Not yet determined', completed: d.personalData!==undefined, actionRequired:false },
+      { group:'Cross-Cutting Regimes',            decision:'NIS2 applicability?',           ...t08, actionRequired:false },
+      { group:'Next Steps',                       decision:'Next engine recommended?',      ...t14, actionRequired:false },
     ],
     P2A:[
-      { group:'Core Provider Obligations',  decision:'Provider obligations triggered?',      result: 'YES — Title III Chapter 2', status: 'yes' },
-      { group:'Core Provider Obligations',  decision:'Risk management (Art. 9)?',            result: d.riskMethodology ? `YES — ${d.riskMethodology.slice(0,40)}` : 'Pending', status: d.riskMethodology?'yes':'pending' },
-      { group:'Core Provider Obligations',  decision:'Data governance (Art. 10)?',           result: d.dataSources ? 'YES — data governance required' : 'Pending', status: d.dataSources?'yes':'pending' },
-      { group:'Core Provider Obligations',  decision:'Technical documentation (Art. 11)?',   result: d.annexIVRef ? `YES — ${d.annexIVRef}` : 'Required — Annex IV', status: 'yes' },
-      { group:'Core Provider Obligations',  decision:'Logging (Art. 12)?',                   result: 'YES — automatic logging required', status: 'yes' },
-      { group:'Core Provider Obligations',  decision:'Human oversight (Art. 14)?',           result: d.adm===false ? 'YES — human review in place' : 'Required', status: d.adm===false?'yes':'pending' },
-      { group:'Core Provider Obligations',  decision:'QMS (Art. 17)?',                       result: d.qmsStandard ? `YES — ${d.qmsStandard.slice(0,30)}` : 'Required', status: d.qmsStandard?'yes':'pending' },
-      { group:'Conformity & Market Entry',  decision:'Conformity assessment (Art. 43)?',     result: d.conformityRoute || 'Pending — see O12', status: d.conformityRoute?'yes':'pending' },
-      { group:'Conformity & Market Entry',  decision:'CE marking (Art. 48)?',                result: d.ceMarkingStatus || 'Pending — post conformity', status: d.ceMarkingStatus?'yes':'pending' },
-      { group:'Handover',                   decision:'P2B handover required?',              result: d.deployerName ? `YES — ${d.deployerName}` : 'YES — deployer to complete P2B', status: 'yes' },
+      { group:'Core Provider Obligations',  decision:'Provider obligations triggered?',      result: 'Triggered — Title III Chapter 2', completed:true, actionRequired:false },
+      { group:'Core Provider Obligations',  decision:'Risk management (Art. 9)?',            result: d.riskMethodology ? d.riskMethodology.slice(0,60) : 'Not yet documented', completed: !!d.riskMethodology, actionRequired: !d.riskMethodology },
+      { group:'Core Provider Obligations',  decision:'Data governance (Art. 10)?',           result: d.dataSources ? 'Data governance framework documented' : 'Not yet documented', completed: !!d.dataSources, actionRequired: !d.dataSources },
+      { group:'Core Provider Obligations',  decision:'Technical documentation (Art. 11)?',   result: d.annexIVRef ? d.annexIVRef : 'Not yet referenced', completed: !!d.annexIVRef, actionRequired: !d.annexIVRef },
+      { group:'Core Provider Obligations',  decision:'Logging (Art. 12)?',                   result: 'Automatic logging implemented', completed:true, actionRequired:false },
+      { group:'Core Provider Obligations',  decision:'Human oversight (Art. 14)?',           result: d.adm===false ? 'Human review in place' : 'Not yet confirmed', completed: d.adm===false, actionRequired: d.adm!==false },
+      { group:'Core Provider Obligations',  decision:'QMS (Art. 17)?',                       result: d.qmsStandard ? d.qmsStandard.slice(0,40) : 'Not yet documented', completed: !!d.qmsStandard, actionRequired: !d.qmsStandard },
+      { group:'Conformity & Market Entry',  decision:'Conformity assessment (Art. 43)?',     result: d.conformityRoute || 'Not yet determined — see O12', completed: !!d.conformityRoute, actionRequired: !d.conformityRoute },
+      { group:'Conformity & Market Entry',  decision:'CE marking (Art. 48)?',                result: d.ceMarkingStatus || 'Not yet available — follows conformity assessment', completed: !!d.ceMarkingStatus, actionRequired:false },
+      { group:'Handover',                   decision:'P2B handover required?',              result: d.deployerName ? `Required — ${d.deployerName}` : 'Required — deployer to complete P2B', completed:true, actionRequired:false },
     ],
     P2B:[
-      { group:'Deployer Obligations',            decision:'Deployer obligations triggered?', result: 'YES — Art. 26', status: 'yes' },
-      { group:'Deployer Obligations',            decision:'P2A provider package received?',  result: d.p2aHandoverRef ? `YES — ${d.p2aHandoverRef}` : 'PENDING — required from provider', status: d.p2aHandoverRef?'yes':'warn' },
-      { group:'Deployer Obligations',            decision:'Intended purpose compliance?',    result: d.deploymentContext ? 'Confirmed' : 'Pending confirmation', status: d.deploymentContext?'yes':'pending' },
-      { group:'Deployer Obligations',            decision:'Human oversight (Art. 26(2))?',   result: d.adm===false ? 'YES — human review implemented' : 'Required', status: d.adm===false?'yes':'pending' },
-      { group:'Impact & Risk Assessment',        decision:'FRIA required (Art. 27)?',        result: d.deploymentScale ? 'YES — FRIA required' : 'Assessment pending', status: d.deploymentScale?'yes':'pending' },
-      { group:'Monitoring & Incident Response',  decision:'Monitoring (Art. 26(6))?',        result: 'YES — post-market monitoring required', status: 'yes' },
-      { group:'Monitoring & Incident Response',  decision:'Incident reporting (Art. 73)?',   result: 'YES — serious incident protocol required', status: 'yes' },
-      { group:'Downstream',                      decision:'P3 transparency required?',       result: d.r50Interacts===true ? 'YES — see P3' : 'Assess via P3', status: d.r50Interacts===true?'yes':'pending' },
+      { group:'Deployer Obligations',            decision:'Deployer obligations triggered?', result: 'Triggered — Art. 26', completed:true, actionRequired:false },
+      { group:'Deployer Obligations',            decision:'P2A provider package received?',  result: d.p2aHandoverRef ? d.p2aHandoverRef : 'Not yet received from provider', completed: !!d.p2aHandoverRef, actionRequired: !d.p2aHandoverRef },
+      { group:'Deployer Obligations',            decision:'Intended purpose compliance?',    result: d.deploymentContext ? 'Confirmed' : 'Not yet confirmed', completed: !!d.deploymentContext, actionRequired:false },
+      { group:'Deployer Obligations',            decision:'Human oversight (Art. 26(2))?',   result: d.adm===false ? 'Human review implemented' : 'Not yet confirmed', completed: d.adm===false, actionRequired: d.adm!==false },
+      { group:'Impact & Risk Assessment',        decision:'FRIA required (Art. 27)?',        result: d.deploymentScale ? 'Required' : 'Applicability not yet assessed', completed: d.deploymentScale!==undefined, actionRequired:false },
+      { group:'Monitoring & Incident Response',  decision:'Monitoring (Art. 26(6))?',        result: 'Post-market monitoring required', completed:true, actionRequired:false },
+      { group:'Monitoring & Incident Response',  decision:'Incident reporting (Art. 73)?',   result: 'Serious-incident protocol required', completed:true, actionRequired:false },
+      { group:'Downstream',                      decision:'P3 transparency required?',       result: d.r50Interacts===true ? 'Required — see P3' : d.r50Interacts===false ? 'Not required' : 'Applicability not yet assessed', completed: d.r50Interacts!==undefined, actionRequired:false },
     ],
     P3:[
-      { group:'Article 50 Transparency Triggers', decision:'Art. 50(1) — direct interaction?',   result: d.r50Interacts===true?'YES — notice required':d.r50Interacts===false?'NO':'Inherited from P1', status: d.r50Interacts===true?'yes':d.r50Interacts===false?'no':'pending' },
-      { group:'Article 50 Transparency Triggers', decision:'Art. 50(2) — biometric?',            result: d.r50Biometric===true?'YES — disclosure required':d.r50Biometric===false?'NO':'Inherited from P1', status: d.r50Biometric===true?'yes':'no' },
-      { group:'Article 50 Transparency Triggers', decision:'Art. 50(3) — emotion recognition?',  result: d.r50Emotion===true?'YES — disclosure required':d.r50Emotion===false?'NO':'Inherited from P1', status: d.r50Emotion===true?'yes':'no' },
-      { group:'Article 50 Transparency Triggers', decision:'Art. 50(4) — synthetic content?',    result: d.r50Synthetic===true?'YES — watermarking required':d.r50Synthetic===false?'NO':'Inherited from P1', status: d.r50Synthetic===true?'yes':'no' },
-      { group:'Implementation',                   decision:'Notice languages required?',         result: d.noticeLanguages?.length?(Array.isArray(d.noticeLanguages)?d.noticeLanguages.join(', '):d.noticeLanguages):'As per deployment countries', status: d.noticeLanguages?.length?'yes':'pending' },
+      { group:'Article 50 Transparency Triggers', decision:'Art. 50(1) — direct interaction?',   result: d.r50Interacts===true?'Applicable — notice required':d.r50Interacts===false?'Not applicable':'Inherited from P1 — not yet assessed', completed: d.r50Interacts!==undefined, actionRequired:false },
+      { group:'Article 50 Transparency Triggers', decision:'Art. 50(2) — biometric?',            result: d.r50Biometric===true?'Applicable — disclosure required':d.r50Biometric===false?'Not applicable':'Inherited from P1 — not yet assessed', completed: d.r50Biometric!==undefined, actionRequired:false },
+      { group:'Article 50 Transparency Triggers', decision:'Art. 50(3) — emotion recognition?',  result: d.r50Emotion===true?'Applicable — disclosure required':d.r50Emotion===false?'Not applicable':'Inherited from P1 — not yet assessed', completed: d.r50Emotion!==undefined, actionRequired:false },
+      { group:'Article 50 Transparency Triggers', decision:'Art. 50(4) — synthetic content?',    result: d.r50Synthetic===true?'Applicable — watermarking required':d.r50Synthetic===false?'Not applicable':'Inherited from P1 — not yet assessed', completed: d.r50Synthetic!==undefined, actionRequired:false },
+      { group:'Implementation',                   decision:'Notice languages required?',         result: d.noticeLanguages?.length?(Array.isArray(d.noticeLanguages)?d.noticeLanguages.join(', '):d.noticeLanguages):'Not yet determined — defaults to deployment countries', completed: !!d.noticeLanguages?.length, actionRequired:false },
     ],
     P4:[
-      { group:'Classification Confirmation', decision:'Minimal risk confirmed?',         result: 'YES — voluntary code of conduct applies', status: 'yes' },
-      { group:'Classification Confirmation', decision:'Art. 5 prohibited?',              result: 'NO — confirmed by P1 routing', status: 'no' },
-      { group:'Voluntary Governance',        decision:'Transparency (Art. 50)?',         result: d.r50Interacts===true?'YES — notices required':'NO — below threshold', status: d.r50Interacts===true?'yes':'no' },
-      { group:'Voluntary Governance',        decision:'Voluntary measures recommended?', result: 'YES — see output package', status: 'yes' },
+      { group:'Classification Confirmation', decision:'Minimal risk confirmed?',         result: 'Minimal risk — voluntary code of conduct applies', completed:true, actionRequired:false },
+      { group:'Classification Confirmation', decision:'Art. 5 prohibited?',              result: 'Not prohibited — confirmed by P1 routing', completed:true, actionRequired:false },
+      { group:'Voluntary Governance',        decision:'Transparency (Art. 50)?',         result: d.r50Interacts===true?'Applicable — notices required':'Not applicable — below threshold', completed: d.r50Interacts!==undefined, actionRequired:false },
+      { group:'Voluntary Governance',        decision:'Voluntary measures recommended?', result: 'Yes — see output package', completed:true, actionRequired:false },
     ],
   };
 
   const pillarRows = rows[pillar] || [];
   const pillarLabel = {P1:'Classification',P2A:'Provider',P2B:'Deployer',P3:'Transparency',P4:'Minimal Risk'}[pillar] || pillar;
-  const statusColor = { yes:'var(--green)', no:'var(--faint)', pending:'var(--gold-2)', warn:'var(--red)', exempt:'var(--blue-2, var(--blue))' };
-  const statusIcon  = { yes:'&#10003;', no:'&#8212;', pending:'&#8226;', warn:'&#9888;', exempt:'&#8709;' };
-  const statusLabel = { yes:'YES', no:'NO', pending:'TBD', warn:'WARN', exempt:'EXEMPT' };
 
-  // Overall readiness: any WARN outranks any PENDING, which outranks a
-  // clean read — a reviewer scanning only this one badge must see the
-  // worst thing that's true, never an average of everything else.
-  const hasWarn    = pillarRows.some(r=>r.status==='warn');
-  const hasPending = pillarRows.some(r=>r.status==='pending');
-  const overall = hasWarn ? {label:'ACTION REQUIRED', color:'var(--red)'}
-                : hasPending ? {label:'IN PROGRESS', color:'var(--gold-2)'}
+  // Workflow/action colour is a SEPARATE axis from the substantive result
+  // colour above: it reflects whether THIS row still needs something,
+  // never what the row's regulatory conclusion happens to be.
+  const rowAccentColor = row => row.actionRequired ? 'var(--red)'
+                                : !row.completed ? 'var(--status-progress)'
+                                : (severityColorFromResultText(row.result) || 'var(--border-3)');
+  const rowTag = row => row.actionRequired ? {label:'ACTION REQUIRED', color:'var(--red)'}
+                       : !row.completed ? {label:'IN PROGRESS', color:'var(--status-progress)'}
+                       : null; // a completed, non-blocking row needs no workflow tag — the result itself is the information
+
+  // Overall pillar readiness: ACTION REQUIRED outranks IN PROGRESS, which
+  // outranks COMPLETE — a reviewer scanning only this one badge must see
+  // the most demanding true state, never an average. Per spec: COMPLETE
+  // means every determination this dashboard represents is reached AND
+  // no mandatory outstanding action remains; IN PROGRESS means a
+  // determination/input is still outstanding with no specific blocker
+  // flagged yet; ACTION REQUIRED means a concrete unresolved action exists.
+  const hasActionRequired = pillarRows.some(r=>r.actionRequired);
+  const hasIncomplete     = pillarRows.some(r=>!r.completed);
+  const overall = hasActionRequired ? {label:'ACTION REQUIRED', color:'var(--red)'}
+                : hasIncomplete ? {label:'IN PROGRESS', color:'var(--status-progress)'}
                 : {label:'COMPLETE', color:'var(--green)'};
-  const resolvedCount = pillarRows.filter(r=>r.status!=='pending').length;
-  const warnCount     = pillarRows.filter(r=>r.status==='warn').length;
-  const docsCount     = outs.filter(o=>o.state==='done'||o.state==='complete').length;
+
+  const completedCount = pillarRows.filter(r=>r.completed).length;
+  const actionCount    = pillarRows.filter(r=>r.actionRequired).length;
+  const docsCount       = outs.filter(o=>o.state==='done'||o.state==='complete').length;
 
   // Group rows in first-seen order so each pillar's own category sequence
   // (defined above) drives the layout, not object-key iteration order.
@@ -10820,23 +10852,24 @@ function buildExecutiveDashboard(sys, pillar){
       </div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">
-      ${kpiTile('Decisions resolved', `${resolvedCount} / ${pillarRows.length}`)}
+      ${kpiTile('Determinations completed', `${completedCount} / ${pillarRows.length}`)}
       ${kpiTile('Documents generated', docsCount)}
-      ${kpiTile('Warnings', warnCount, warnCount?'var(--red)':'var(--ink)')}
-      ${kpiTile('Overall status', overall.label, overall.color)}
+      ${kpiTile('Actions required', actionCount, actionCount?'var(--red)':'var(--ink)')}
     </div>
     ${groupOrder.map(group=>`
     <div style="margin-bottom:14px;">
       <div style="font-family:var(--font-mono),monospace;font-size:8px;letter-spacing:0.12em;text-transform:uppercase;color:var(--faint);padding-bottom:5px;margin-bottom:6px;border-bottom:0.5px solid var(--border-2);">${esc(group)}</div>
-      ${pillarRows.filter(r=>r.group===group).map(row=>`
-      <div style="display:flex;align-items:flex-start;gap:10px;padding:7px 4px;border-left:2px solid ${statusColor[row.status]||'var(--faint)'};padding-left:10px;margin-bottom:4px;">
-        <span style="font-family:var(--font-mono),monospace;font-size:11px;font-weight:600;color:${statusColor[row.status]||'var(--faint)'};flex-shrink:0;width:16px;">${statusIcon[row.status]||'?'}</span>
+      ${pillarRows.filter(r=>r.group===group).map(row=>{
+        const accent = rowAccentColor(row);
+        const tag = rowTag(row);
+        return `
+      <div style="display:flex;align-items:flex-start;gap:10px;padding:7px 4px;border-left:2px solid ${accent};padding-left:10px;margin-bottom:4px;">
         <div style="flex:1;min-width:0;">
           <div style="color:var(--muted);font-size:11.5px;">${esc(row.decision)}</div>
-          <div style="color:var(--ink);font-size:12px;margin-top:1px;">${esc(row.result)}</div>
+          <div style="color:${row.completed?'var(--ink)':'var(--faint)'};font-size:12px;font-weight:${row.completed?600:400};margin-top:1px;">${esc(row.result)}</div>
         </div>
-        <span style="font-family:var(--font-mono),monospace;font-size:8.5px;font-weight:600;color:${statusColor[row.status]||'var(--faint)'};flex-shrink:0;padding-top:1px;">${statusLabel[row.status]||'TBD'}</span>
-      </div>`).join('')}
+        ${tag ? `<span style="font-family:var(--font-mono),monospace;font-size:8.5px;font-weight:600;color:${tag.color};flex-shrink:0;padding-top:1px;white-space:nowrap;">${tag.label}</span>` : ''}
+      </div>`;}).join('')}
     </div>`).join('')}
   </div>`;
   return html;
