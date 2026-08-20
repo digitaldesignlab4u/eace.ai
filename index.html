@@ -5977,13 +5977,17 @@ async function execRun(){
       return;
     }
     exec.currentIdx=idx;
+    exec._running=true;
+    const controller=(st.apiKey && !st.claudeMode) ? new AbortController() : null;
+    exec._abortController=controller;
+    const timeoutId=controller ? setTimeout(function(){ try{ controller.abort(); }catch(e){} }, REQUEST_TIMEOUT_MS) : null;
     try{
       if(st.claudeMode) await execClaudeMode(idx);
-      else if(st.apiKey) await execApiMode(idx);
+      else if(st.apiKey) await execApiMode(idx, controller && controller.signal);
       else throw new Error('Real generation is not configured. Add an API key or use Manual Claude mode.');
     }catch(err){
       out.state='error';
-      out.lastError=String(err&&err.message?err.message:err);
+      out.lastError=(err&&err.name==='AbortError' && !exec.aborted) ? `${out.code}: no response within ${Math.round(REQUEST_TIMEOUT_MS/1000)}s — request timed out.` : String(err&&err.message?err.message:err);
       out.rawError=err&&err.raw?err.raw:null;
       exec.paused=true;
       updatePauseBtn(true);
@@ -5995,6 +5999,10 @@ async function execRun(){
       if(txt) txt.textContent=`${out.code} stopped. Completed outputs are preserved. Retry only this output, then continue sequentially.`;
       renderExecList(); updateExecProgress(); updateCheckpointButton(); saveExecState();
       return;
+    }finally{
+      if(timeoutId) clearTimeout(timeoutId);
+      exec._running=false;
+      exec._abortController=null;
     }
     // Legacy-stable rule: a successful, non-empty Anthropic response is an
     // atomic completed output. Do not stop the run because of page targets,
@@ -6108,6 +6116,12 @@ function getTokenBudget(pillar, code){
   return 8192;
 }
 const MAX_CONTINUATIONS = 1; // only one continuation, reserved for true truncation
+// A generation request that never resolves (dropped connection, stalled
+// proxy) previously hung execRun's await forever with no AbortController
+// ever created — out.state stayed 'running' and every exec-panel button
+// depending on that state stayed stuck. This ceiling guarantees the
+// in-flight request always settles.
+const REQUEST_TIMEOUT_MS = 180000;
 
 function buildCompletionRepairInstruction(out, validation, attempt){
   const warnings=(validation&&validation.warnings)||[];
@@ -6935,6 +6949,10 @@ function execAbort(){
   if(!confirm('Stop generation? Completed outputs and the current checkpoint will be preserved.')) return;
   exec.aborted = true;
   exec.paused  = false;
+  // A hung/stalled request must be cancelled here, not just have its overlay
+  // hidden — otherwise it keeps out.state stuck on 'running' in the background
+  // and the next run treats the checkpoint as still in-progress.
+  if(exec._abortController){ try{ exec._abortController.abort(); }catch(e){} }
   saveExecState();
   const overlay   = document.getElementById('exec-overlay');
   const cpOverlay = document.getElementById('claude-paste-overlay');
@@ -50002,9 +50020,30 @@ window.importPortfolio=function(e){
   const r=new FileReader();r.onload=function(){try{const p=JSON.parse(r.result),inc=Array.isArray(p)?p:((p.workspace&&p.workspace.systems)||p.systems||(p.system?[p.system]:[]));if(!inc.length)throw new Error('No systems found');const normalized=inc.map(x=>stabilizeSystem(JSON.parse(JSON.stringify(x))));const replace=p&&p.exportType==='complete-workspace-backup';if(replace){WORKSPACE.systems=normalized;st.systems=normalized;}else{const base=(WORKSPACE.systems&&WORKSPACE.systems.length?WORKSPACE.systems:st.systems)||[],ids=new Set(base.map(x=>String(x.id)));normalized.forEach(s=>{if(ids.has(String(s.id)))s.id='sys_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);base.push(s)});WORKSPACE.systems=base;st.systems=base;}WORKSPACE.activeId=(p.workspace&&p.workspace.activeId)||p.activeId||(normalized[0]&&normalized[0].id)||WORKSPACE.activeId;st.activeId=WORKSPACE.activeId;try{if(p.executionCheckpoints)Object.entries(p.executionCheckpoints).forEach(([k,v])=>{if(k.startsWith('eace_exec_v1_'))localStorage.setItem(k,typeof v==='string'?v:JSON.stringify(v))});}catch(_e){};try{saveWorkspace();saveSystems();}catch(_e){};try{renderSystemsTab();}catch(_e){}showToast('Import completed · '+normalized.length+' system(s) · '+normalized.reduce((n,s)=>n+s.generatedOutputs.length,0)+' outputs recovered.','var(--green)');}catch(err){console.error(err);showToast('Import failed: '+String(err.message||err),'var(--red-bright)');}finally{if(e&&e.target)e.target.value='';}};r.onerror=()=>showToast('Import failed: file could not be read.','var(--red-bright)');r.readAsText(f);
 };
 // Non-destructive freeze watchdog: never alters generated content or document formatting.
-let lastBusy=0;const busyKeys=['running','generating','isRunning','isGenerating'];
-setInterval(function(){try{const now=Date.now();let busy=false;busyKeys.forEach(k=>{if(exec&&exec[k])busy=true});if(busy){if(!lastBusy)lastBusy=now;if(now-lastBusy>15*60*1000){busyKeys.forEach(k=>{if(exec&&k in exec)exec[k]=false});document.querySelectorAll('button[disabled][data-eace-running],button.eace-running[disabled]').forEach(b=>b.disabled=false);lastBusy=0;showToast('Stale generation lock released. Completed outputs were preserved.','var(--amber)');}}else lastBusy=0;}catch(e){}},30000);
-window.addEventListener('unhandledrejection',e=>{console.error('Unhandled EACE operation error',e.reason);try{busyKeys.forEach(k=>{if(exec&&k in exec)exec[k]=false})}catch(_){};});
+// Previously keyed off exec.running/generating/isRunning/isGenerating and a
+// data-eace-running/eace-running marker — none of those were ever actually
+// set anywhere in the app, so this watchdog silently never fired and a
+// timed-out/hung request left exec-panel buttons disabled indefinitely.
+// It now watches the real in-flight flag (exec._running, set in execRun)
+// and repaints the actual exec-panel buttons that reflect it.
+let lastBusy=0;
+setInterval(function(){try{
+  const now=Date.now();
+  const busy=!!(exec&&exec._running);
+  if(busy){
+    if(!lastBusy)lastBusy=now;
+    if(now-lastBusy>15*60*1000){
+      if(exec._abortController){ try{ exec._abortController.abort(); }catch(e){} }
+      exec._running=false;
+      exec._abortController=null;
+      try{ updatePauseBtn(!!exec.paused); }catch(e){}
+      try{ updateCheckpointButton(); }catch(e){}
+      lastBusy=0;
+      showToast('Stale generation lock released. Completed outputs were preserved.','var(--amber)');
+    }
+  }else lastBusy=0;
+}catch(e){}},30000);
+window.addEventListener('unhandledrejection',e=>{console.error('Unhandled EACE operation error',e.reason);try{if(exec){exec._running=false;exec._abortController=null;}}catch(_){};});
 try{const lists=[(WORKSPACE&&WORKSPACE.systems)||[],(st&&st.systems)||[]];lists.forEach(a=>a.forEach(stabilizeSystem));}catch(e){}
 })();
 </script>
