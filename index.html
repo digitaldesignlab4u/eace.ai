@@ -12552,7 +12552,13 @@ function renderEAStep(){
     var prov2=EA_PROVIDERS.find(function(p){return p.id===ea.provider;})||{name:''};
     var credLabel=ea.provider==='azure'?'Endpoint URL & Key':'API Credentials';
     var credPh='sk-ant-api03-...';
+    var fileProtoWarning=(typeof location!=='undefined' && location.protocol==='file:')
+      ? '<div class="ea-file-proto-warning" style="background:rgba(224,112,112,0.08);border:0.5px solid rgba(224,112,112,0.4);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:14px;font-size:11.5px;line-height:1.55;color:var(--ink);">'
+        +'<b style="color:var(--red-bright);">This page is open as a local file</b> (the address bar shows <code>file://...</code>). Browsers block the secure connection to the AI provider from a local file regardless of the key entered here. Host this file (e.g. Vercel, Netlify, GitHub Pages) or serve it locally (e.g. run <code>python3 -m http.server</code> in its folder and open <code>http://localhost:8000</code>) and use that web address instead.'
+        +'</div>'
+      : '';
     body='<div class="ea-panel">'
+      +fileProtoWarning
       +'<div class="ea-panel-title">Credentials &mdash; '+esc(prov2.name)+'</div>'
       +'<div class="ea-panel-sub">Enter your '+esc(prov2.name)+' credentials. Held only for this browser session, never written to disk.</div>'
       +'<div class="ea-field"><label class="ea-field-label" for="ea-creds-input">'+esc(credLabel)+'</label>'
@@ -12639,6 +12645,21 @@ async function runEAValidation(){
   // request through the same call path real generation uses.
   const key=String(ea.creds||'').trim();
   const minDisplayMs=new Promise(function(r){ setTimeout(r,1800); });
+
+  // A page opened as a local file (file://...) cannot make a cross-origin
+  // fetch to https://api.anthropic.com at all - Chromium blocks this
+  // unconditionally before the request leaves the browser, regardless of
+  // whether the key is valid. Detect this up front and say so plainly:
+  // "Connection failed, check your key" would be actively misleading here
+  // (no key would ever work) and send the user looking in the wrong place.
+  if(typeof location!=='undefined' && location.protocol==='file:'){
+    await minDisplayMs;
+    ea.step=2;
+    ea.credsError='This page was opened as a local file (file://...), so the browser blocks the secure connection to the AI provider regardless of the key. Open it via a real web address instead: host it (e.g. Vercel, Netlify, GitHub Pages) or run a local web server (e.g. "python3 -m http.server" in the folder, then open http://localhost:8000) and use that http(s):// address, not the downloaded file.';
+    renderEAStep();
+    return;
+  }
+
   let ok=false, errMsg='';
   try{
     await Promise.all([
