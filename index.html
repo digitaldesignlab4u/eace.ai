@@ -2656,6 +2656,7 @@ console.info('[EACE] v63 authoritative PDF export router active (first-registere
         <div id="exec-cost-telemetry" style="font-family:var(--font-mono),monospace;font-size:10px;color:var(--faint);margin-top:6px;letter-spacing:0.02em;"></div>
       </div>
       <button class="exec-pause-btn" id="exec-checkpoint-btn" onclick="execResume()" style="display:inline-flex;border-color:rgba(203,170,110,0.45);color:var(--gold);">&#8635; Retry current output</button>
+      <button class="exec-pause-btn" id="exec-export-partial-btn" onclick="exportPartialExecutionState()" title="Export everything generated so far, including the in-progress output, marked PARTIAL — NOT FOR REGULATORY USE. Works even while a request is active or stalled.">&#8681; Export partial</button>
       <button class="exec-pause-btn" id="exec-pause-btn" onclick="execPauseResume()">&#9208; Pause</button>
       <button class="exec-pause-btn" id="exec-abort-btn" onclick="execAbort()" style="color:var(--red-bright);border-color:rgba(224,112,112,0.3);">&#x2715; Abort</button>
     </div>
@@ -5716,14 +5717,83 @@ function loadExecState(systemId, pillar){
     if(!raw) return null;
     const s = JSON.parse(raw);
     if(s.systemId!==systemId||s.pillar!==pillar) return null;
-    // Only valid if < 48 hours old
-    if(Date.now()-s.savedAt > 48*3600*1000) return null;
+    // Durable by design: a checkpoint must survive an interruption of any
+    // length (a paused run left over a weekend is exactly the case this
+    // exists for), so it is never auto-invalidated by age. The explicit
+    // "Continue from checkpoint" / "Retry" actions remain the only way a
+    // user resumes it — age alone is never a reason to discard saved work.
     return s;
   }catch(e){return null;}
 }
 
 function clearExecState(systemId, pillar){
   try{ localStorage.removeItem(EXEC_LS+'_'+systemId+'_'+pillar); }catch(e){}
+}
+
+// ── PARTIAL EXPORT ──
+// Reads live in-memory exec state directly (no dependency on exec.paused,
+// exec._running or the request-in-flight guard used by the checkpoint
+// button) so it works whether a request is active, stalled or already
+// finished — the whole point is that a user should never be locked out of
+// what already exists. A currently-running/errored/pending output that
+// nonetheless has some content is included but clearly marked partial;
+// completed outputs are exported as-is.
+async function exportPartialExecutionState(){
+  if(!exec || !Array.isArray(exec.outputs) || !exec.outputs.length){
+    showToast('No execution in progress to export.','var(--amber)'); return;
+  }
+  if(typeof JSZip==='undefined'){ showToast('ZIP library not available.','var(--red-bright)'); return; }
+  const zip = new JSZip();
+  const sysName = (st.data && st.data.sysName) || 'system';
+  const stamp = new Date().toISOString().replace(/[:.]/g,'-');
+
+  const checkpointPayload = {
+    exportedAt: new Date().toISOString(),
+    systemId: st.activeId, pillar: exec.pillar, currentIdx: exec.currentIdx,
+    paused: !!exec.paused, aborted: !!exec.aborted, running: !!exec._running,
+    lastCheckpointReason: exec.lastCheckpointReason||'', lastCheckpointAt: exec.lastCheckpointAt||null,
+    actualCostUsd: exec.actualCostUsd||0, requestsDispatched: exec.requestsDispatched||0,
+    outputStates: exec.outputs.map(o=>({code:o.code, state:o.state, wordCount:o.wordCount||0, hasContent:!!(o.content&&o.content.trim())})),
+  };
+  zip.file('checkpoint.json', JSON.stringify(checkpointPayload, null, 2));
+
+  const outFolder = zip.folder('outputs');
+  const telemetryPayload = [];
+  const evidenceRegister = [];
+  exec.outputs.forEach(o=>{
+    const hasContent = !!(o.content && o.content.trim());
+    telemetryPayload.push({
+      code:o.code, state:o.state, model:o.model||null, wordCount:o.wordCount||0,
+      apiCalls:o.apiCalls||0, costUsd:o.costUsd||0, lastError:o.lastError||'',
+      stopReason:o.stopReason||null, telemetry:o.telemetry||[],
+    });
+    if(hasContent){
+      const isPartial = o.state!=='complete';
+      const header = isPartial
+        ? `# ${o.code} — ${o.title||''}\n\n**⚠ PARTIAL — NOT FOR REGULATORY USE.** Generation state: ${o.state}${o.lastError?(' — '+o.lastError):''}. This file is an in-progress or interrupted draft, not a completed EACE artefact.\n\n---\n\n`
+        : `# ${o.code} — ${o.title||''}\n\n`;
+      outFolder.file((isPartial?'PARTIAL-':'')+o.code+'.md', header+o.content);
+      evidenceRegister.push({
+        code:o.code, state:o.state, partial:isPartial,
+        acceptanceStatus: (o.acceptance&&o.acceptance.status)||'NOT_EVALUATED',
+        contractId: (o.acceptance&&o.acceptance.contractId)||null,
+        missingArtefacts: (o.acceptance&&o.acceptance.missingArtefacts)||[],
+        generatedAt: o.generatedAt||null,
+      });
+    }
+  });
+  zip.file('telemetry.json', JSON.stringify(telemetryPayload, null, 2));
+  zip.file('evidence-register.json', JSON.stringify(evidenceRegister, null, 2));
+
+  const blob = await zip.generateAsync({type:'blob'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const sysSlug = String(sysName||'system').replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'').toLowerCase()||'system';
+  a.href = url; a.download = `${sysSlug}-${exec.pillar}-partial-export-${stamp}.zip`;
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 1500);
+  logAudit('export','Partial execution state exported ('+exec.outputs.filter(o=>o.content&&o.content.trim()).length+' outputs, '+(exec.outputs.filter(o=>o.state!=='complete'&&o.content&&o.content.trim()).length)+' partial).',exec.pillar,sysName);
+  showToast('Partial export downloaded.','var(--green)');
 }
 
 // ── MAIN RUN ENTRY POINT ──
