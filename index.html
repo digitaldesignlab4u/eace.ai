@@ -6066,6 +6066,7 @@ async function execRun(){
       if(banner) banner.style.display='flex';
       const txt=document.getElementById('exec-resume-txt');
       if(txt) txt.textContent=`${out.code} is the first unfinished output. Retry only this output from the saved checkpoint; completed outputs will not be regenerated.`;
+      showRawErrorPanel(out.rawError);
       updatePauseBtn(true);
       renderExecList();
       updateExecProgress();
@@ -6092,6 +6093,7 @@ async function execRun(){
       if(banner) banner.style.display='flex';
       const txt=document.getElementById('exec-resume-txt');
       if(txt) txt.textContent=`${out.code} stopped. Completed outputs are preserved. Retry only this output, then continue sequentially.`;
+      showRawErrorPanel(out.rawError);
       renderExecList(); updateExecProgress(); updateCheckpointButton(); saveExecState();
       return;
     }finally{
@@ -7845,6 +7847,26 @@ function execPauseResume(){
     document.getElementById('exec-title').textContent='Generation paused';
     saveExecState();
     logAudit('run','Generation paused at output '+(exec.currentIdx+1),exec.pillar,st.data.sysName||'—');
+  }
+}
+
+// Shows/hides the raw technical error detail inside the checkpoint banner
+// (#exec-raw-error-panel, already in the HTML and styled, but this
+// function itself was missing entirely - every call to it, including the
+// very first line of execResume(), threw an uncaught ReferenceError and
+// silently aborted before anything else in the function ran. That is why
+// "Continue from checkpoint", "Retry ... from checkpoint" and "Retry
+// current output & continue" (which all call execResume) appeared to do
+// nothing: the click handler crashed on its first statement.
+function showRawErrorPanel(content){
+  const panel=document.getElementById('exec-raw-error-panel');
+  if(!panel) return;
+  if(content){
+    panel.textContent=typeof content==='string'?content:JSON.stringify(content,null,2);
+    panel.style.display='block';
+  }else{
+    panel.style.display='none';
+    panel.textContent='';
   }
 }
 
