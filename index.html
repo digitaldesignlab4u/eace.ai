@@ -6902,6 +6902,37 @@ function validateOutputAcceptance(pillar, code, text, ctx){
     return {status:'NOT_APPLICABLE', contractId:contract.id, missingArtefacts:[], legalConstantViolations:[], unsupportedStatusClaims:[], overlap:{ratio:0,flagged:false}, notApplicable:true};
   }
 
+  // CSV-A/CSV-B machine-readable outputs get a REAL structural check
+  // (does the extracted content actually parse as the claimed format),
+  // not just a keyword-presence scan - checking for the word "csv" or
+  // "json" in prose proves nothing about whether real structured data
+  // was produced. Uses the same extraction the export pipeline uses
+  // (extractMachineReadableArtefact), so pass/fail here matches what
+  // would actually land in the exported file.
+  if(/^CSV/i.test(code||'')){
+    const extracted = (typeof extractMachineReadableArtefact==='function') ? extractMachineReadableArtefact(pillar, {code, content:trimmed}) : null;
+    const isJson = extracted && /\.json$/i.test(extracted.filename||'');
+    const body = extracted ? extracted.content : trimmed;
+    const structuralIssues = [];
+    if(!extracted || !extracted.fenceFound) structuralIssues.push('No fenced code block found — the machine-readable content must be delivered as an actual ```csv or ```json block, not embedded in prose.');
+    if(isJson){
+      try{ JSON.parse(body); }catch(e){ structuralIssues.push('Content after the fence is not valid JSON: '+e.message); }
+    } else {
+      const rows = body.split(/\r?\n/).filter(l=>l.trim());
+      if(rows.length<2) structuralIssues.push('Fewer than 2 CSV rows (need at least a header row and one data row).');
+      else{
+        const colCount = rows[0].split(',').length;
+        const inconsistent = rows.slice(1).some(r=>r.split(',').length!==colCount);
+        if(inconsistent) structuralIssues.push('CSV rows have an inconsistent column count vs. the header row.');
+      }
+    }
+    return {
+      status: structuralIssues.length ? 'BLOCKED' : 'ACCEPTED',
+      contractId: contract.id, missingArtefacts: structuralIssues, legalConstantViolations:[],
+      unsupportedStatusClaims:[], overlap:{ratio:0,flagged:false}, notApplicable:false,
+    };
+  }
+
   const allRequirements = [].concat(
     contract.requiredArtefacts||[], contract.mandatoryTables||[], contract.decisionRecords||[],
     contract.procedures||[], contract.registers||[], contract.templates||[],
@@ -6939,7 +6970,12 @@ function validateOutputAcceptance(pillar, code, text, ctx){
     return decisionLayerMarkers.filter(re=>!re.test(head)).length > 2; // tolerant: allow up to 2 of 7 to be phrased differently
   })();
 
-  const structurallyBlocked = missingArtefacts.length>0 || legalConstantViolations.length>0 || overlapFlagged || isBareOutline || decisionLayerMissing;
+  // An unsupported status claim (asserting something is implemented/
+  // certified/verified/etc. with no provenance tag, gate or trace to
+  // user-supplied input) is exactly the anti-hallucination failure this
+  // contract system exists to catch - it blocks acceptance rather than
+  // being advisory-only, matching every other structural check here.
+  const structurallyBlocked = missingArtefacts.length>0 || legalConstantViolations.length>0 || overlapFlagged || isBareOutline || decisionLayerMissing || unsupportedStatusClaims.length>0;
   const status = structurallyBlocked ? 'BLOCKED' : approvalFieldsPending.length>0 ? 'ACCEPTED_PENDING_APPROVAL' : 'ACCEPTED';
 
   return {
@@ -7204,6 +7240,18 @@ async function execApiMode(idx, signal){
     inputSnapshot: getExecutionInputData(),
     priorTexts: exec.outputs.filter(o=>o.code!==out.code && o.content).map(o=>o.content),
   });
+  // A response confirmed truncated at max_tokens is never a complete
+  // artefact regardless of what the structural checks above found - the
+  // document may be missing its final section entirely. This does NOT
+  // retrigger generation (out.state below is unchanged, so the run
+  // sequence still advances and no second paid request fires); it only
+  // stops the artefact from being reported as regulator-ready.
+  if(stopReason==='max_tokens' && out.acceptance.status!=='BLOCKED'){
+    out.acceptance = Object.assign({}, out.acceptance, {
+      status:'BLOCKED',
+      missingArtefacts:(out.acceptance.missingArtefacts||[]).concat(['Response truncated at max_tokens — the artefact may be missing content after the cut-off point; continuation/regeneration required before this is regulator-ready.']),
+    });
+  }
 
   // Proven legacy behaviour: any successful non-empty response is complete.
   // stop_reason is retained in telemetry for review, but it never blocks the
@@ -12019,17 +12067,27 @@ async function sha256Hex(text){
 function buildFinalRegulatoryReview(sys, pillar, outputs){
   const requiredThemes=['Annex IV','Risk Management','QMS','FRIA','DPIA','Transparency','Instructions for Use','Declaration','Technical Documentation'];
   const corpus=outputs.map(o=>String(o.content||'')).join('\n\n').toLowerCase();
+  // Keyword presence is a coarse, advisory signal only (a theme can be
+  // "present" merely because the word is mentioned in passing) - it is
+  // NOT a substitute for the per-output acceptance contracts below, which
+  // is why status is driven by acceptance, never by this alone.
   const checks=requiredThemes.map(theme=>({theme,present:corpus.includes(theme.toLowerCase())}));
   const crossRefs=[];
   outputs.forEach(o=>{
     const refs=[...String(o.content||'').matchAll(/\b(?:O|P)[A-Z0-9-]{1,8}\b/g)].map(m=>m[0]);
     refs.forEach(ref=>{ if(!outputs.some(x=>x.code===ref)) crossRefs.push({from:o.code,ref}); });
   });
+  const blockedOutputs = outputs.filter(o=>o.acceptance && o.acceptance.status==='BLOCKED').map(o=>({code:o.code, gaps:(o.acceptance.missingArtefacts||[]).concat(o.acceptance.legalConstantViolations||[]).slice(0,3)}));
+  const pendingApprovalOutputs = outputs.filter(o=>o.acceptance && o.acceptance.status==='ACCEPTED_PENDING_APPROVAL').map(o=>o.code);
+  const status = blockedOutputs.length ? 'MATERIAL COMPLETION ACTIONS OPEN'
+    : pendingApprovalOutputs.length ? 'GENERATED — PENDING HUMAN APPROVAL'
+    : crossRefs.length ? 'COMPLETE WITH ADVISORIES' : 'COMPLETE';
   const review={
     title:'Final Regulatory Review',pillar,generatedAt:new Date().toISOString(),
-    status:crossRefs.length?'COMPLETE WITH ADVISORIES':'COMPLETE',
+    status,
     checks,crossReferenceAdvisories:crossRefs.slice(0,100),
-    statement:'The review is deterministic and non-generative. It does not regenerate completed outputs; it records package-level consistency and coverage signals for expert review.'
+    blockedOutputs, pendingApprovalOutputs,
+    statement:'The review is deterministic and non-generative. It does not regenerate completed outputs; it records package-level consistency and coverage signals for expert review. Keyword-theme checks are advisory only; blockedOutputs/pendingApprovalOutputs reflect the actual per-output acceptance contract results.'
   };
   sys.finalRegulatoryReviews=sys.finalRegulatoryReviews||{};
   sys.finalRegulatoryReviews[pillar]=review;
@@ -12128,6 +12186,13 @@ async function execComplete(){
         stopReason:o.stopReason||null,
         continuationCount:o.continuationCount||0,
         validation:o.validation||null,
+        // acceptance was being silently dropped here: this end-of-run rebuild
+        // OVERWRITES the per-output records that persistCompletedExecOutput()
+        // had already saved correctly (with acceptance) during the run, so
+        // every completed run erased its own regulatory-readiness data the
+        // moment it finished - the dashboard's readiness/approval panels had
+        // nothing to read after a normal successful run.
+        acceptance:o.acceptance||null,
         telemetry:o.telemetry||[],
         ts:        o.generatedAt||new Date().toISOString(),
         evidenceId:'EV-'+exec.pillar+'-'+o.code+'-'+Date.now(),
@@ -12136,7 +12201,11 @@ async function execComplete(){
     // Final review is appended locally; it never triggers another model call.
     _sys.generatedOutputs.push({
       pillar:exec.pillar, code:'FRR', title:'Final Regulatory Review', article:'Package-level consistency review', cat:'Review', pages:1,
-      content:'# Final Regulatory Review\n\nStatus: '+finalReview.status+'\n\n'+finalReview.checks.map(c=>'- '+c.theme+': '+(c.present?'covered':'not detected — expert confirmation required')).join('\n'),
+      content:'# Final Regulatory Review\n\nStatus: '+finalReview.status+'\n\n'
+        +(finalReview.blockedOutputs.length?'## Acceptance-blocked outputs (material completion actions open)\n'+finalReview.blockedOutputs.map(b=>'- '+b.code+': '+(b.gaps.join('; ')||'acceptance check failed')).join('\n')+'\n\n':'')
+        +(finalReview.pendingApprovalOutputs.length?'## Pending human approval\n'+finalReview.pendingApprovalOutputs.map(c=>'- '+c).join('\n')+'\n\n':'')
+        +'## Theme coverage (advisory keyword signal only — not a substitute for the acceptance results above)\n'
+        +finalReview.checks.map(c=>'- '+c.theme+': '+(c.present?'covered':'not detected — expert confirmation required')).join('\n'),
       state:'complete', wordCount:0, estimatedPages:1, model:'deterministic-local', stopReason:'local_review', continuationCount:0,
       validation:{valid:true,warnings:finalReview.crossReferenceAdvisories.length?['Cross-reference advisories recorded.']:[]}, telemetry:[],
       ts:finalReview.generatedAt, evidenceId:'EV-'+exec.pillar+'-FRR-'+Date.now()
@@ -12212,9 +12281,16 @@ async function execComplete(){
     // with no indication of *why* anything was blocked or that the run as a
     // whole hadn't fully succeeded.
     const blockedOutputs = exec.outputs.filter(function(o){return o.state==='error';});
+    // Distinct from generation errors above: these outputs finished
+    // generating (out.state==='complete') but failed their own output
+    // acceptance contract - a different, non-technical kind of "not done"
+    // that must never be reported as success.
+    const acceptanceBlocked = exec.outputs.filter(function(o){return o.state==='complete' && o.acceptance && o.acceptance.status==='BLOCKED';});
     if(blockedOutputs.length){
       const reason = (blockedOutputs[0].content||'').replace(/^Error:\s*/,'').slice(0,140);
       showToast(blockedOutputs.length+' of '+exec.outputs.length+' outputs blocked — '+reason, 'var(--red-bright)');
+    } else if(acceptanceBlocked.length){
+      showToast(doneCount+' outputs generated — '+acceptanceBlocked.length+' failed acceptance review (see dashboard).', 'var(--status-review)');
     } else {
       showToast('All '+doneCount+' outputs generated successfully.', 'var(--green)');
     }
@@ -15955,17 +16031,40 @@ const OUTPUT_SPECIFICATIONS = Object.freeze({
 
 // Returns the real complexity signal for an output — used to give continuation
 // progress a genuine reference point instead of a bare "Continuing..." with
-// no context. Matches by exact code, numeric-normalised code, or P-EID code.
+// no context.
+//
+// OUTPUT_ACCEPTANCE_CONTRACTS is the primary source: it has verified 1:1
+// coverage against the OUTPUTS catalogue (the actual codes exec.outputs
+// uses), so mandatorySections is derived from the real count of that
+// contract's required tables/registers/records/etc.
+//
+// The OUTPUT_SPECIFICATIONS legacy table below is used only as a fallback
+// for a code with no contract (should not occur given full coverage).
+// IMPORTANT: that table's own codes are bare numbers ('1','25',...) that
+// do NOT reliably correspond to the same output as the current O-code of
+// the same number — e.g. legacy P2A code '25' is "CODE OF CONDUCT
+// FRAMEWORK" while OUTPUTS.P2A code 'O25' is the unrelated "Contractual
+// instrument package" — so the normalised-numeric match previously used
+// here could silently apply the wrong output's complexity signal. Do not
+// widen use of this fallback without re-auditing that table against
+// OUTPUTS.
 function getOutputSpec(pillar, code){
+  const contract = OUTPUT_ACCEPTANCE_CONTRACTS[pillar] && OUTPUT_ACCEPTANCE_CONTRACTS[pillar][code];
+  if(contract){
+    const sectionCount = ['mandatoryTables','decisionRecords','procedures','registers','templates','technicalArtefacts','operationalArtefacts','evidenceFields']
+      .reduce((n,k)=>n+((contract[k]&&contract[k].length)||0), 0);
+    return { code, title:contract.id, mandatorySections:sectionCount, source:'OUTPUT_ACCEPTANCE_CONTRACTS' };
+  }
   const list = OUTPUT_SPECIFICATIONS[pillar];
   if(!list) return null;
   const norm = String(code).replace(/^O0*/,'').replace(/^0+/,'') || '0';
-  return list.find(o =>
+  const legacy = list.find(o =>
     o.code === code ||
     o.code === norm ||
     o.code.replace(/\s*\(CSV-[AB]\)/,'') === norm ||
     (o.code.includes('-EID-') && code.includes(o.code.split('-EID-')[1]))
   ) || null;
+  return legacy ? Object.assign({}, legacy, {source:'OUTPUT_SPECIFICATIONS_legacy_fallback'}) : null;
 }
 
 
