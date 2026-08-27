@@ -6080,6 +6080,795 @@ function validateGeneratedOutput(pillar, outputCode, content, metadata){
 
   return { valid, truncated, placeholder, missingSections: severeMissingStructure?['Mandatory structure']:[], wordCount, estimatedPages, headingCount, tableSignals, warnings, advisoryOnly: valid&&warnings.length>0 };
 }
+// ═══════════════════════════════════════════════════════════════════
+// OUTPUT-SPECIFIC ACCEPTANCE CONTRACT SYSTEM
+// ═══════════════════════════════════════════════════════════════════
+// Central authoritative registry of what each canonical output (from the
+// OUTPUTS catalogue above) must actually contain to be treated as a
+// regulation-ready artefact, as distinct from "the model produced some
+// text". This is additive to, not a replacement for, the canonical prompt
+// text in CANONICAL_PROMPTS: the canonical prompt remains the source of
+// legal substance; this registry is the source of STRUCTURAL/ARTEFACT
+// acceptance criteria used (a) to strengthen the per-output instruction
+// sent to the model and (b) to validate what comes back. Where the two
+// would conflict, this registry's structural checklist governs
+// acceptance/completion status; the canonical prompt governs legal content.
+//
+// This does not, and cannot, perform legal correctness review — no
+// client-side heuristic can verify that a generated legal conclusion is
+// RIGHT. What it verifies is STRUCTURAL: did the artefact include the
+// decision records, tables, registers and evidence fields its contract
+// requires, or does it read as an essay/outline/gap-analysis instead.
+
+// ── LEGAL CONSTANTS REGISTRY ──
+// Single source of truth for retention periods and legal-instrument facts
+// that are easy to state generically-wrong. Used by the validator to flag
+// an output that asserts a conflicting figure, and available to prompt
+// injection so the model is told the correct figures up front.
+const LEGAL_CONSTANTS = Object.freeze({
+  retention: {
+    art18ProviderDocumentation: {
+      years: 10,
+      basis: 'AI Act Art. 18',
+      rule: '10 years after the AI system has been placed on the market or put into service.',
+    },
+    art19ProviderLogs: {
+      minYears: 0.5,
+      basis: 'AI Act Art. 19',
+      rule: 'At least six months, unless otherwise provided by applicable Union or national law (in particular Union law on the protection of personal data).',
+    },
+    art26_6DeployerLogs: {
+      minYears: 0.5,
+      basis: 'AI Act Art. 26(6)',
+      rule: 'At least six months, unless otherwise provided by applicable Union or national law (in particular Union law on the protection of personal data).',
+    },
+    gdprPersonalDataInLogs: {
+      basis: 'GDPR Art. 5(1)(e)',
+      rule: 'Personal data within a log record is subject to a SEPARATE storage-limitation assessment under GDPR; the AI Act retention floor does not itself authorise indefinite personal-data retention.',
+    },
+  },
+  // A generic "5 years" or "10 years" retention claim for LOGS specifically
+  // (as opposed to Art. 18 documentation, which genuinely is 10 years) is
+  // unsupported and must be flagged.
+  unsupportedGenericRetentionPattern: /\b(five|5|ten|10)[\s-]year(s)?\s+(log|record)\s+retention\b/i,
+  nis2IsDirectiveNotRegulation: {
+    basis: 'Directive (EU) 2022/2555 (NIS2)',
+    rule: 'NIS2 is a DIRECTIVE implemented through national transposition measures, not a directly applicable EU Regulation. An output must not describe NIS2 obligations as directly and uniformly applicable EU law without reference to the relevant national transposing measure (or a flagged gap where it is not yet identified).',
+  },
+  friaTrigger: {
+    basis: 'AI Act Art. 27',
+    rule: 'FRIA activation requires the actual Article 27 deployer/use-case test (public-body or essential-private-service deployer deploying a high-risk system in specific listed use cases) — mere public-facing interaction or a chatbot serving the public is NOT by itself a FRIA trigger.',
+  },
+});
+
+function checkLegalConstantViolations(text){
+  const violations=[];
+  const t=String(text||'');
+  if(LEGAL_CONSTANTS.unsupportedGenericRetentionPattern.test(t)){
+    violations.push('Generic "5/10-year log retention" claim detected — Art. 19/Art. 26(6) logs are a minimum of six months absent another legal basis; Art. 18 documentation (10 years) must not be conflated with log retention.');
+  }
+  if(/\bNIS2\b[^.]{0,120}\b(directly applicable|automatically applies|is a regulation)\b/i.test(t)){
+    violations.push('NIS2 described as directly applicable / a Regulation — NIS2 is a Directive requiring national transposition.');
+  }
+  if(/\bFRIA\b[^.]{0,160}\b(because|since|as)\b[^.]{0,80}\b(public[- ]facing|interacts? with the public|serves the public)\b/i.test(t) &&
+     !/\barticle\s*27\b|\bart\.?\s*27\b/i.test(t)){
+    violations.push('FRIA trigger appears to be justified by mere public-facing interaction rather than the Art. 27 deployer/use-case test.');
+  }
+  return violations;
+}
+
+// ── PROVENANCE TAGS ──
+const PROVENANCE_TAGS = Object.freeze(['USER_SUPPLIED','ATTACHMENT_SUPPORTED','SYSTEM_DERIVED','OFFICIAL_SOURCE','ASSUMPTION','NOT_ESTABLISHED']);
+
+// Verbs that assert a completed real-world state — never usable for a
+// claim the system itself cannot have independently verified.
+const UNSUPPORTED_STATUS_VERBS = ['implemented','certified','verified','tested','approved','operational','active','compliant','production-ready'];
+
+// Flags sentences that assert one of the unsupported-status verbs about the
+// SYSTEM/organisation without any nearby provenance tag or explicit
+// "NOT ESTABLISHED"/"REQUIRED"/"PENDING" qualifier, and without evidence the
+// claim traces to user input or an attachment. This is a heuristic proximity
+// scan, not semantic verification — it flags for human review, it does not
+// itself prove a claim false.
+function scanUnsupportedStatusClaims(text, inputSnapshot){
+  const t = String(text||'');
+  const flags = [];
+  const sentences = t.split(/(?<=[.!?])\s+(?=[A-Z(])/);
+  const snapshotProbe = JSON.stringify(inputSnapshot||{}).toLowerCase();
+  UNSUPPORTED_STATUS_VERBS.forEach(verb=>{
+    const re = new RegExp('\\b(is|are|has been|have been|was|were)\\s+'+verb+'\\b','i');
+    sentences.forEach(s=>{
+      if(!re.test(s)) return;
+      const hasProvenanceTag = /\b(USER_SUPPLIED|ATTACHMENT_SUPPORTED|SYSTEM_DERIVED|OFFICIAL_SOURCE|ASSUMPTION|NOT_ESTABLISHED)\b/.test(s);
+      const hasGate = /\b(REQUIRED|NOT PROVIDED|PENDING|NOT ESTABLISHED|EVIDENCE REQUIRED|INPUT REQUIRED|TO BE CONFIRMED|subject to)\b/i.test(s);
+      if(hasProvenanceTag || hasGate) return;
+      // If the claimed fact/number/name appears verbatim in the user's own
+      // input snapshot, treat it as traceable to user input rather than an
+      // unsupported system claim.
+      const words=(s.match(/\b[A-Za-z0-9][A-Za-z0-9.-]{3,}\b/g)||[]).map(w=>w.toLowerCase());
+      const traceable = words.some(w=>snapshotProbe.includes(w));
+      if(traceable) return;
+      flags.push({verb, sentence:s.trim().slice(0,220)});
+    });
+  });
+  return flags;
+}
+
+// ── ANTI-REPETITION / DISTINCTIVENESS ──
+// Excludes legitimate shared boilerplate (document identity, HITL notice,
+// controlled legal citations, evidence-register headings, standard footer)
+// then compares substantive sentences/table rows against prior outputs in
+// the same run. Flags — does not silently truncate — content that is
+// >35% copied without output-specific value.
+const SHARED_BOILERPLATE_PATTERNS = [
+  /^#{1,3}\s*(document identity|artefact identity)/i,
+  /human[- ]in[- ]the[- ]loop|HITL/i,
+  /^#{1,3}\s*(evidence register|evidence map)\s*$/i,
+  /^(EACE|Generated by EACE|This artefact was generated)/i,
+  /^#{1,3}\s*(footer|disclaimer)/i,
+  /^\|.*Article.*\|.*Regulation \(EU\) 2024\/1689.*\|$/i,
+];
+function isSharedBoilerplateLine(line){
+  return SHARED_BOILERPLATE_PATTERNS.some(re=>re.test(line));
+}
+function substantiveLines(text){
+  return String(text||'').split(/\r?\n/)
+    .map(l=>l.trim())
+    .filter(l=>l.length>25 && !isSharedBoilerplateLine(l));
+}
+function computeSubstantiveOverlapRatio(text, priorTexts){
+  const mine = substantiveLines(text);
+  if(!mine.length) return {ratio:0, copiedLines:0, totalLines:0};
+  const priorSet = new Set();
+  (priorTexts||[]).forEach(pt=>substantiveLines(pt).forEach(l=>priorSet.add(l)));
+  let copied=0;
+  mine.forEach(l=>{ if(priorSet.has(l)) copied++; });
+  return {ratio: copied/mine.length, copiedLines: copied, totalLines: mine.length};
+}
+
+// ── ACCEPTANCE CONTRACT SHAPE (documented, not enforced by a schema
+// validator — this comment is the schema reference) ──
+// {
+//   id, purpose,
+//   requiredArtefacts:[...], mandatoryTables:[...], decisionRecords:[...],
+//   procedures:[...], registers:[...], templates:[...],
+//   technicalArtefacts:[...], operationalArtefacts:[...],
+//   evidenceFields:[...], machineReadableAnnex: string|null,
+//   visualComponent: string, approvalFields:[...],
+//   distinctivenessNote: string, prohibitedSubstitutes:[...],
+//   completionBlockers:[...] (regexes/keys checked by the validator),
+//   conditionalActivation: {condition, notApplicableReasonRequired:bool}|null,
+// }
+
+const OUTPUT_ACCEPTANCE_CONTRACTS = { P1:{}, P2A:{}, P2B:{}, P3:{}, P4:{} };
+
+function defineContract(pillar, code, contract){
+  OUTPUT_ACCEPTANCE_CONTRACTS[pillar][code] = Object.freeze(Object.assign({
+    requiredArtefacts:[], mandatoryTables:[], decisionRecords:[], procedures:[],
+    registers:[], templates:[], technicalArtefacts:[], operationalArtefacts:[],
+    evidenceFields:[], machineReadableAnnex:null, visualComponent:'status-card',
+    approvalFields:[], prohibitedSubstitutes:['legal essay with no decision record','bare gap analysis','outline/table of contents only'],
+    completionBlockers:[], conditionalActivation:null,
+  }, contract));
+}
+
+// ═══════════════════════════ P1 — CLASSIFICATION & ROUTING ═══════════════════════════
+defineContract('P1','O01',{
+  id:'P1-O01 Territorial scope decision record', purpose:'Determine whether AI Act territorial scope (Art. 2) is engaged for this system and actor.',
+  decisionRecords:['Territorial-scope decision record: provider location, deployer location, place of output use, EU-market placement test, Art. 2(1)(a)-(c) route applied, result'],
+  mandatoryTables:['Territorial scope test matrix (criterion | fact | Art. 2 sub-provision | met Y/N | evidence)'],
+  evidenceFields:['Provenance tag per fact used in the test'],
+  machineReadableAnnex:'territorial-scope.json: {inScope:boolean, route:string, factsUsed:[]}',
+  visualComponent:'decision-card',
+  completionBlockers:['no explicit IN SCOPE / OUT OF SCOPE determination stated','no Art. 2 sub-provision cited for the route applied'],
+});
+defineContract('P1','O02',{
+  id:'P1-O02 Article 5 prohibition matrix + biometric-function register', purpose:'Screen the system against every Art. 5(1) prohibited practice, including biometric-specific prohibitions.',
+  mandatoryTables:['Article 5 prohibition matrix (Art. 5(1)(a)-(h) | practice description | applicable Y/N | reasoning | evidence)','Biometric-function register (function present: remote biometric identification / categorisation / emotion recognition / none | location | Art. 5 sub-provision engaged)'],
+  decisionRecords:['Overall prohibition determination: PROHIBITED / NOT PROHIBITED, with the specific Art. 5(1) letter if prohibited'],
+  registers:['Biometric-function register'],
+  completionBlockers:['matrix does not cover all eight Art. 5(1) letters','a bare "no prohibited practice identified" without the matrix'],
+  prohibitedSubstitutes:['general essay on Article 5 without a per-practice matrix'],
+});
+defineContract('P1','O03',{
+  id:'P1-O03 Annex I / Annex III classification tests', purpose:'Point-by-point Annex III high-risk evaluation (and Annex I product-safety linkage where applicable).',
+  mandatoryTables:['Annex III point-by-point test (each of the 8 Annex III areas | applicable Y/N | sub-point matched | reasoning)'],
+  decisionRecords:['High-risk classification decision: HIGH-RISK / NOT HIGH-RISK, with Annex III point cited if high-risk; Annex I product-safety-component determination if relevant'],
+  completionBlockers:['fewer than all 8 Annex III areas addressed','no explicit classification decision stated'],
+});
+defineContract('P1','O04',{
+  id:'P1-O04 Article 6(3) exception record', purpose:'Assess whether the Art. 6(3) narrow-exception carve-out removes an otherwise Annex-III-matched system from high-risk status.',
+  decisionRecords:['Art. 6(3) exception record: condition tested (a)-(d), met Y/N, resulting classification effect, and — where the provider considers the exception applies — the Art. 6(4) documentation obligation noted'],
+  completionBlockers:['exception invoked without testing which of the four Art. 6(3)(a)-(d) conditions applies'],
+  conditionalActivation:{condition:'System matched an Annex III area in O03', notApplicableReasonRequired:true},
+});
+defineContract('P1','O05',{
+  id:'P1-O05 FRIA trigger decision', purpose:'Apply the actual Art. 27 deployer/use-case test — never trigger FRIA merely because the system interacts with the public.',
+  decisionRecords:['FRIA trigger decision record: deployer category (public body / body providing public services / private Art.27(1) listed use case / other), specific Art. 27(1) criterion matched if any, TRIGGERED / NOT TRIGGERED'],
+  completionBlockers:['FRIA triggered without naming the Art. 27(1) deployer category or listed use case','FRIA justified only by "public-facing" or "interacts with users of the public"'],
+});
+defineContract('P1','O06',{
+  id:'P1-O06 GPAI dependency & value-chain record', purpose:'Map GPAI/foundation-model dependency and resulting Art. 51-55 value-chain obligations.',
+  registers:['GPAI dependency register (model/provider used | systemic-risk-designated Y/N | integrator role | which Art. 53-55 duties pass through)'],
+  decisionRecords:['Value-chain role determination for the GPAI relationship'],
+  completionBlockers:['no register when a GPAI/foundation model dependency is described in the system profile'],
+  conditionalActivation:{condition:'System profile indicates GPAI/foundation-model use', notApplicableReasonRequired:true},
+});
+defineContract('P1','O07',{
+  id:'P1-O07 GDPR 5-step assessment + ePrivacy trigger assessment', purpose:'Run the GDPR Art. 35-anchored five-step assessment and a separate ePrivacy trigger check.',
+  decisionRecords:['GDPR five-step record: (1) personal data involved Y/N, (2) lawful basis, (3) special-category/Art.9 data Y/N, (4) high-risk processing / DPIA-trigger test, (5) resulting obligation set','ePrivacy trigger record: terminal-equipment/cookie/metadata access tested separately from GDPR'],
+  completionBlockers:['GDPR and ePrivacy assessments merged into one undifferentiated analysis'],
+});
+defineContract('P1','O08',{
+  id:'P1-O08 NIS2 entity classification', purpose:'Classify essential/important-entity status under national NIS2 transposition — NIS2 is a Directive, not directly applicable.',
+  decisionRecords:['NIS2 classification record naming the relevant national transposing measure or flagging it as [OFFICIAL SOURCE VERIFICATION REQUIRED] where not identified'],
+  completionBlockers:['NIS2 obligations stated as directly and uniformly applicable EU law with no national-transposition reference'],
+});
+defineContract('P1','O09',{
+  id:'P1-O09 Sector-overlay activation map', purpose:'Map applicable sector-specific regimes derived from the system profile (not a fixed catalogue).',
+  registers:['Sector overlay register (regime | trigger fact | status: APPLIED / NOT APPLICABLE-REASON / VERIFICATION REQUIRED)'],
+  completionBlockers:['sector overlays listed without a per-entry trigger fact or status'],
+});
+defineContract('P1','O10',{
+  id:'P1-O10 National overlay activation map', purpose:'Map applicable national/jurisdiction-specific overlays derived from the system profile.',
+  registers:['National overlay register (jurisdiction | regime/transposition | trigger fact | status)'],
+  completionBlockers:['national overlays listed without a per-entry trigger fact or status'],
+});
+defineContract('P1','O11',{
+  id:'P1-O11 Article 50 transparency-routing record', purpose:'Determine which Art. 50 transparency duties are triggered and route them to P3.',
+  decisionRecords:['Transparency-routing record: Art. 50(1)/(2)/(3)/(4) each tested separately, TRIGGERED/NOT TRIGGERED, routed-to-P3 output reference'],
+  completionBlockers:['Art. 50 sub-provisions not tested separately'],
+});
+defineContract('P1','O12',{
+  id:'P1-O12 Consent and lawful-basis assessment', purpose:'GDPR Art. 6/9 lawful-basis determination for personal data processing identified in O07.',
+  decisionRecords:['Lawful-basis record per identified processing activity (activity | Art. 6(1) basis | Art. 9 condition if special-category | consent-specific test if relied on)'],
+  conditionalActivation:{condition:'O07 identified personal-data processing', notApplicableReasonRequired:true},
+});
+defineContract('P1','O13',{
+  id:'P1-O13 Risk classification summary + standards applicability register', purpose:'Consolidate the classification decision and applicable harmonised-standards register.',
+  decisionRecords:['Consolidated classification decision (PROHIBITED / HIGH-RISK / LIMITED-RISK / MINIMAL-RISK / EXEMPT) drawing on O02-O04'],
+  registers:['Standards applicability register (harmonised standard/technical specification | applicable Y/N | basis)'],
+  completionBlockers:['classification stated without cross-referencing O02/O03/O04 results'],
+});
+defineContract('P1','O14',{
+  id:'P1-O14 Routing decision + actor-role determination', purpose:'Determine actor role (provider/deployer/importer/distributor/product-manufacturer, Art. 3 & 25) and route to the correct downstream pillar package(s).',
+  decisionRecords:['Actor-role determination record (role tested against Art. 3/25 criteria | result)','Routing decision: which of P2A/P2B/P3/P4 packages apply and why'],
+  completionBlockers:['routing given without an actor-role determination record'],
+});
+function _p1EvidenceContract(code, label){
+  defineContract('P1', code, {
+    id:'P1-'+code+' Evidence Layer — '+label, purpose:'Evidence chain supporting the '+label+' determination made elsewhere in P1.',
+    evidenceFields:['Fact','Provenance tag (USER_SUPPLIED/ATTACHMENT_SUPPORTED/SYSTEM_DERIVED/OFFICIAL_SOURCE/ASSUMPTION/NOT_ESTABLISHED)','Which upstream output the fact supports','Gap/verification-required flag where applicable'],
+    mandatoryTables:['Evidence chain table for '+label],
+    machineReadableAnnex:'evidence-'+code.toLowerCase()+'.json',
+    completionBlockers:['evidence presented as prose narrative with no per-fact provenance tag'],
+  });
+}
+_p1EvidenceContract('O15','exemption evidence (Art. 2(3)(6)(10)(12))');
+_p1EvidenceContract('O16','territorial evidence (Art. 2(1))');
+_p1EvidenceContract('O17','Annex III evidence');
+_p1EvidenceContract('O18','GPAI evidence (Arts. 51-55)');
+_p1EvidenceContract('O19','data-protection evidence (GDPR/ePrivacy)');
+defineContract('P1','O20',{
+  id:'P1-O20 STOP notice', purpose:'Formal stop notice where O02 found a prohibited practice.',
+  decisionRecords:['STOP determination restating the Art. 5(1) letter engaged and immediate consequence (the system must not be placed on the market/put into service/used in that form)'],
+  visualComponent:'status-card', 
+  completionBlockers:['STOP notice generated when O02 did not find a prohibition (must instead be NOT APPLICABLE)'],
+  conditionalActivation:{condition:'O02 determination is PROHIBITED', notApplicableReasonRequired:true},
+});
+defineContract('P1','O21',{
+  id:'P1-O21 Executive summary + regulatory timeline', purpose:'Decision-layer summary of the full P1 package plus the applicable AI Act regulatory timeline for this system.',
+  decisionRecords:['Compact decision layer: result, why, what happens next, legal basis, evidence state, main blockers, five prioritised actions'],
+  mandatoryTables:['Regulatory timeline (milestone | AI Act date/provision | relevance to this system)'],
+  visualComponent:'completeness-waterfall',
+  completionBlockers:['summary omits the seven-part decision layer','no timeline table'],
+});
+defineContract('P1','CSV-A',{
+  id:'P1-CSV-A Machine-readable classification export', purpose:'Structured export of the classification decision for downstream tooling.',
+  machineReadableAnnex:'p1-classification.csv with columns: outputCode,determination,legalBasis,actorRole,evidenceState',
+  visualComponent:'none',
+  prohibitedSubstitutes:['a prose description of what the CSV would contain instead of the CSV/JSON itself'],
+  completionBlockers:['delivered as narrative text instead of actual delimited/structured data'],
+});
+defineContract('P1','CSV-B',{
+  id:'P1-CSV-B Machine-readable evidence export', purpose:'Structured export of the O15-O19 evidence chain for downstream tooling.',
+  machineReadableAnnex:'p1-evidence.csv with columns: evidenceId,outputCode,fact,provenanceTag,gapFlag',
+  visualComponent:'none',
+  prohibitedSubstitutes:['a prose description of what the CSV would contain instead of the CSV/JSON itself'],
+  completionBlockers:['delivered as narrative text instead of actual delimited/structured data'],
+});
+
+// ═══════════════════════════ P2A — PROVIDER OBLIGATIONS ═══════════════════════════
+defineContract('P2A','O01',{
+  id:'P2A-O01 Governance & responsibility package', purpose:'Actor register, RACI, delegations, authority and acceptance for provider obligations.',
+  registers:['Actor register (name/role | Art. 16/25 duty | delegation status)'],
+  mandatoryTables:['RACI matrix per Art. 16 obligation'],
+  approvalFields:['Delegation instrument reference','Authority sign-off field','Acceptance date'],
+  completionBlockers:['no RACI matrix','no named acceptance/sign-off field'],
+});
+defineContract('P2A','O02',{
+  id:'P2A-O02 Annex IV technical documentation', purpose:'Full Annex IV technical file: architecture, interfaces, dependencies, data flows, trust boundaries, model/version registry.',
+  technicalArtefacts:['Component inventory','System architecture diagram/description','Interface register','Dependency register','Data-flow map','Trust-boundary map','Model/version registry'],
+  registers:['Model/version registry (version | training data ref | change date | approver)'],
+  completionBlockers:['missing any of: component inventory, architecture, interfaces, dependencies, data flows, trust boundaries, version registry'],
+  prohibitedSubstitutes:['a narrative description of the architecture with no component inventory or version registry'],
+});
+defineContract('P2A','O03',{
+  id:'P2A-O03 Risk management system plan', purpose:'Art. 9 risk-management method, register, scoring, controls, residual-risk criteria, approval.',
+  procedures:['Risk-management method (identification, estimation, evaluation, treatment, monitoring)'],
+  registers:['Risk register (risk | likelihood | impact | score | control | residual score | owner)'],
+  approvalFields:['Residual-risk acceptance criteria','Approver and date'],
+  completionBlockers:['risk register absent or contains no scoring/residual-risk column'],
+});
+defineContract('P2A','O04',{
+  id:'P2A-O04 Data governance & quality record', purpose:'Art. 10 dataset register, provenance, lineage, quality tests, representativeness and bias testing.',
+  registers:['Dataset register (dataset | source | provenance | lineage | collection date | purpose)'],
+  procedures:['Data-quality test procedure','Representativeness/bias testing procedure and results'],
+  completionBlockers:['no dataset register','no representativeness/bias testing record'],
+});
+defineContract('P2A','O05',{
+  id:'P2A-O05 Training/validation/test record', purpose:'Art. 10(6) V&V record for training, validation and test datasets and results.',
+  mandatoryTables:['Test case table (test case | test data | expected result | actual result | pass/fail)'],
+  registers:['Defects/deviations/CAPA register'],
+  completionBlockers:['no pass/fail test-case table','no defects/CAPA register'],
+});
+defineContract('P2A','O06',{
+  id:'P2A-O06 Logging and event record design', purpose:'Art. 12 event taxonomy, field dictionary, JSON Schema, sample records, integrity, retention.',
+  technicalArtefacts:['Event taxonomy','Field dictionary','Actual JSON Schema for log events','At least 3 labelled synthetic example log records','Integrity/hash mechanism','Access matrix','Retention schedule (per LEGAL_CONSTANTS.retention.art19ProviderLogs)'],
+  machineReadableAnnex:'log-event-schema.json (real JSON Schema) + 3 sample records',
+  completionBlockers:['no actual JSON Schema present (prose description of fields is not sufficient)','fewer than 3 sample records','retention schedule missing or contradicts the Art. 19 six-month floor'],
+  prohibitedSubstitutes:['a prose description of what fields a log "should" contain, without the JSON Schema itself'],
+});
+defineContract('P2A','O07',{
+  id:'P2A-O07 Instructions for use', purpose:'Art. 13 instructions for use for the deployer.',
+  operationalArtefacts:['Intended purpose statement','Known limitations','Foreseeable misuse','Human-oversight measures the deployer must implement','Expected lifetime and maintenance measures'],
+  completionBlockers:['no explicit limitations/foreseeable-misuse section'],
+});
+defineContract('P2A','O08',{
+  id:'P2A-O08 Human oversight specification', purpose:'Art. 14 oversight workflow, authority, competence, approve/reject/override/stop controls, escalation, logging, effectiveness testing.',
+  procedures:['Oversight workflow (trigger | reviewer authority | competence requirement | action: approve/reject/override/stop | escalation path)'],
+  evidenceFields:['Effectiveness-testing record for the oversight measures'],
+  completionBlockers:['no override/stop control described','no effectiveness-testing record'],
+});
+defineContract('P2A','O09',{
+  id:'P2A-O09 Quality assurance specification (QMS design)', purpose:'Art. 15 & 9(8) QA specification feeding the full QMS manual (O11).',
+  procedures:['QA procedures with controlled form references'],
+  completionBlockers:['no controlled-form references'],
+});
+defineContract('P2A','O10',{
+  id:'P2A-O10 Accuracy and robustness report', purpose:'Art. 15 accuracy metrics, robustness testing, adversarial/error-handling results.',
+  mandatoryTables:['Accuracy/robustness metrics table (metric | method | result | acceptance threshold | pass/fail)'],
+  completionBlockers:['metrics claimed without a method/threshold/pass-fail table'],
+});
+defineContract('P2A','O11',{
+  id:'P2A-O11 QMS manual', purpose:'Art. 17 quality management system: actual procedures, controlled forms, version history, approval fields.',
+  procedures:['Each Art. 17(1)(a)-(g) QMS element as an actual usable procedure, not a restated obligation list'],
+  templates:['Controlled form set referenced by the procedures'],
+  approvalFields:['Version history table','Approval/sign-off per procedure'],
+  completionBlockers:['Art. 17 elements merely listed/restated rather than converted into procedures','no version history'],
+});
+defineContract('P2A','O12',{
+  id:'P2A-O12 Conformity assessment pathway', purpose:'Art. 43 + Annexes VI/VII route determination.',
+  decisionRecords:['Route determination: internal control (Annex VI) vs notified-body (Annex VII), with the Art. 43 criterion that determines the route'],
+  completionBlockers:['route stated with no Art. 43 criterion cited'],
+});
+defineContract('P2A','O13',{
+  id:'P2A-O13 Conformity assessment verification protocol', purpose:'Art. 43 verification protocol operationalising O12.',
+  procedures:['Step-by-step verification protocol matching the chosen route'],
+  completionBlockers:['protocol does not match the route determined in O12'],
+});
+defineContract('P2A','O14',{
+  id:'P2A-O14 EU Declaration of Conformity', purpose:'Art. 47 + Annex V declaration.',
+  templates:['Annex V-conformant Declaration of Conformity template, ready to sign'],
+  approvalFields:['Signatory name/role','Date','System identification matching O02'],
+  completionBlockers:['declaration missing an Annex V-required field','no signatory field'],
+});
+defineContract('P2A','O15',{
+  id:'P2A-O15 CE marking instruction', purpose:'Art. 48 CE marking placement and format instruction.',
+  operationalArtefacts:['Marking placement instruction','Format/size compliance checklist per Art. 48'],
+  completionBlockers:['no placement/format instruction'],
+});
+defineContract('P2A','O16',{
+  id:'P2A-O16 EU database registration package', purpose:'Art. 49 & 71 registration package.',
+  templates:['Registration data-entry template matching the Art. 49/71 required fields'],
+  completionBlockers:['registration fields not enumerated'],
+});
+defineContract('P2A','O17',{
+  id:'P2A-O17 Post-market monitoring plan (PMS)', purpose:'Art. 72 PMS indicators, thresholds, data sources, trend review, escalation.',
+  mandatoryTables:['PMS indicator table (indicator | threshold | data source | review cadence | escalation trigger)'],
+  completionBlockers:['indicators listed with no threshold or escalation trigger'],
+});
+defineContract('P2A','O18',{
+  id:'P2A-O18 Incident and malfunction reporting template', purpose:'Art. 73 incident management: intake form, decision tree, reporting trigger, deadlines, escalation, CAPA.',
+  templates:['Incident intake form'],
+  decisionRecords:['Serious-incident decision tree (Art. 3(49) criteria)'],
+  procedures:['Reporting deadline/escalation procedure','CAPA procedure'],
+  completionBlockers:['no decision tree distinguishing a serious incident from a routine malfunction','no CAPA procedure'],
+});
+defineContract('P2A','O19',{
+  id:'P2A-O19 GPAI model obligations assessment', purpose:'Arts. 25, 53-55 GPAI-specific provider obligations where applicable.',
+  decisionRecords:['GPAI role/obligation determination'],
+  conditionalActivation:{condition:'GPAI dependency identified in P1-O06', notApplicableReasonRequired:true},
+});
+defineContract('P2A','O20',{
+  id:'P2A-O20 GDPR compliance and processor pack', purpose:'GDPR Arts. 28/35/37 provider-side data-protection package.',
+  templates:['Data Processing Agreement (Art. 28) template','DPIA screening record','DPO-designation record where applicable'],
+  completionBlockers:['no Art. 28 DPA template where the provider processes personal data on the deployer\'s behalf'],
+});
+defineContract('P2A','O21',{
+  id:'P2A-O21 National and sector overlay summary', purpose:'Consolidated Overlay Application Ledger for the provider package.',
+  registers:['Overlay Application Ledger (overlay rule | source | trigger | effect on output | control | evidence | status: APPLIED/NOT APPLICABLE-REASON/VERIFICATION REQUIRED/CONFLICT DETECTED)'],
+  completionBlockers:['ledger present only as a descriptive appendix with no per-row status'],
+});
+defineContract('P2A','O22',{
+  id:'P2A-O22 FRIA input document', purpose:'Art. 27 provider-side input package feeding the deployer\'s FRIA (P2B-O06).',
+  operationalArtefacts:['System information the deployer needs to complete Art. 27(1) FRIA fields'],
+  completionBlockers:['content duplicates the deployer FRIA instead of supplying provider-side input to it'],
+});
+defineContract('P2A','O23',{
+  id:'P2A-O23 Validation and verification report', purpose:'Art. 9(8) V&V report consolidating O05/O10 results at package level.',
+  mandatoryTables:['Consolidated V&V results table'],
+  completionBlockers:['no consolidation, i.e. re-states O05/O10 verbatim with no package-level view'],
+});
+defineContract('P2A','O24',{
+  id:'P2A-O24 NIS2 provider obligations record', purpose:'NIS2 provider-side obligations record (Directive requiring national transposition).',
+  decisionRecords:['NIS2 obligations record naming the national transposing measure or flagging [OFFICIAL SOURCE VERIFICATION REQUIRED]'],
+  completionBlockers:['NIS2 treated as directly applicable EU Regulation'],
+});
+defineContract('P2A','O25',{
+  id:'P2A-O25 Contractual instrument package (7 instruments)', purpose:'Seven usable Art. 25 contractual instruments as separate templates, not summaries.',
+  templates:['Provider-deployer responsibility agreement','Data processing agreement','Sub-processor/component supplier agreement','Confidentiality/IP agreement','SLA / support agreement','Liability and indemnity clause set','Change-notification agreement'],
+  completionBlockers:['fewer than 7 distinct usable templates','instruments summarised in prose rather than provided as templates'],
+});
+defineContract('P2A','O26',{
+  id:'P2A-O26 Data sovereignty and localisation record', purpose:'GDPR Chapter V transfer/localisation record.',
+  decisionRecords:['Transfer mechanism record per identified third-country transfer (SCCs / adequacy / derogation)'],
+  conditionalActivation:{condition:'A third-country data transfer is identified', notApplicableReasonRequired:true},
+});
+defineContract('P2A','O27',{
+  id:'P2A-O27 Internal audit trail template', purpose:'Art. 17(1)(g) internal audit programme.',
+  templates:['Audit workpaper template','Findings register template'],
+  completionBlockers:['no workpaper/findings-register template'],
+});
+defineContract('P2A','O28',{
+  id:'P2A-O28 Deployer handover package', purpose:'Actual handover package with acceptance record and receipt fields for P2B-O02 bridge.',
+  templates:['Handover package contents list','Acceptance/receipt record with signature fields'],
+  completionBlockers:['no signature/receipt field'],
+});
+defineContract('P2A','O29',{
+  id:'P2A-O29 Market surveillance cooperation record', purpose:'Arts. 74-78 cooperation-readiness record.',
+  procedures:['Market-surveillance request-response procedure'],
+  completionBlockers:['no named response procedure/contact point'],
+});
+defineContract('P2A','O30',{
+  id:'P2A-O30 Substantial modification assessment', purpose:'Art. 6(5) & 43(4) substantial-modification test.',
+  decisionRecords:['Substantial-modification determination against the Art. 6(5)/43(4) criteria'],
+});
+defineContract('P2A','O31',{
+  id:'P2A-O31 Executive summary — provider package', purpose:'Decision-layer summary of the full P2A package.',
+  decisionRecords:['Compact decision layer: result, why, what happens next, legal basis, evidence state, main blockers, five prioritised actions'],
+  visualComponent:'completeness-waterfall',
+  completionBlockers:['summary omits the seven-part decision layer'],
+});
+defineContract('P2A','CSV-A',{
+  id:'P2A-CSV-A Machine-readable provider-obligations export', machineReadableAnnex:'p2a-obligations.csv', visualComponent:'none',
+  completionBlockers:['delivered as narrative text instead of actual structured data'],
+});
+defineContract('P2A','CSV-B',{
+  id:'P2A-CSV-B Machine-readable evidence-map export', machineReadableAnnex:'p2a-evidence-map.csv', visualComponent:'none',
+  completionBlockers:['delivered as narrative text instead of actual structured data'],
+});
+
+// ═══════════════════════════ P2B — DEPLOYER OBLIGATIONS ═══════════════════════════
+// P2B must not be a lighter copy of P2A — every contract below is built around
+// deployer-specific facts (Art. 26) rather than restating provider (Art. 16) duties.
+defineContract('P2B','O01',{
+  id:'P2B-O01 Deployer responsibility record + Art. 26 compliance matrix', purpose:'Assign deployer-specific responsibilities distinct from the provider package.',
+  mandatoryTables:['Art. 26 compliance matrix (Art. 26(1)-(11) duty | assigned role | evidence | status)'],
+  registers:['Deployer actor register'],
+  completionBlockers:['matrix restates provider (Art. 16) duties instead of Art. 26 deployer duties'],
+});
+defineContract('P2B','O02',{
+  id:'P2B-O02 P2A↔P2B Bridge Map', purpose:'Reconcile the deployer package against the actual provider handover (P2A-O28), flagging gaps.',
+  mandatoryTables:['Bridge map (P2A-O28 handover item | received Y/N | deployer action required | gap flag)'],
+  completionBlockers:['bridge map not cross-referenced to actual P2A-O28 handover content'],
+});
+defineContract('P2B','O03',{
+  id:'P2B-O03 Deployer technical documentation addendum', purpose:'Art. 26(6) & Annex IV deployer-specific addendum (deployment environment, integration, local configuration) — not a copy of P2A-O02.',
+  technicalArtefacts:['Deployment-environment description','Integration/configuration record distinct from the provider Annex IV file'],
+  completionBlockers:['addendum duplicates P2A-O02 content instead of adding deployer-specific detail'],
+});
+defineContract('P2B','O04',{
+  id:'P2B-O04 Moment layer — deployment context record', purpose:'Art. 26(1) point-in-time deployment context: who, where, how the system is actually used.',
+  decisionRecords:['Deployment context record (deployment date, environment, user population, operating conditions)'],
+});
+defineContract('P2B','O05',{
+  id:'P2B-O05 DPIA', purpose:'GDPR Art. 35 Data Protection Impact Assessment — complete template, not a screening note.',
+  templates:['Full DPIA template: processing description, necessity/proportionality, risk assessment, mitigating measures, DPO consultation, residual-risk sign-off'],
+  approvalFields:['DPO/controller sign-off'],
+  completionBlockers:['DPIA reduced to a screening question instead of the full assessment'],
+  conditionalActivation:{condition:'High-risk personal-data processing identified (P1-O07)', notApplicableReasonRequired:true},
+});
+defineContract('P2B','O06',{
+  id:'P2B-O06 FRIA', purpose:'Art. 27 Fundamental Rights Impact Assessment — complete template using the actual Art. 27(1) criteria, not a public-interaction shortcut.',
+  templates:['Full FRIA template: deployment process description, categories of natural persons affected, specific risks of harm, human-oversight measures, governance measures, complaint mechanism'],
+  completionBlockers:['FRIA triggered/completed on a "public-facing" basis without naming the Art. 27(1) criterion'],
+  conditionalActivation:{condition:'P1-O05 FRIA trigger = TRIGGERED', notApplicableReasonRequired:true},
+});
+defineContract('P2B','O07',{
+  id:'P2B-O07 Worker notification package', purpose:'Art. 26(7) worker/representative notification — distinct from the Art. 50 end-user notice (O08).',
+  templates:['Worker notification text','Representative-consultation record'],
+  completionBlockers:['worker notification merged with the general Art. 50 end-user transparency notice'],
+});
+defineContract('P2B','O08',{
+  id:'P2B-O08 Article 50 transparency notice package (deployer)', purpose:'Deployer-side Art. 50 disclosure duties — coordinated with, not substituted for, P3.',
+  operationalArtefacts:['Deployer disclosure implementation record cross-referenced to the relevant P3 notice output(s)'],
+  completionBlockers:['duplicates full P3 notice text instead of the deployer implementation/placement record'],
+});
+defineContract('P2B','O09',{
+  id:'P2B-O09 Human oversight deployment protocol', purpose:'Art. 26(5) deployer-side oversight: appointment, authority, competence and operating record — distinct from the provider oversight spec (P2A-O08).',
+  decisionRecords:['Oversight appointment record (named/role-based appointee, authority, competence)'],
+  procedures:['Day-to-day operating record of oversight actions taken'],
+  completionBlockers:['restates P2A-O08 provider spec instead of the deployer appointment/operating record'],
+});
+defineContract('P2B','O10',{
+  id:'P2B-O10 Logging and monitoring implementation record', purpose:'Art. 26(6) deployer-side log retention/control implementation.',
+  operationalArtefacts:['Retention control implementation record (retention period applied vs. Art. 26(6) six-month floor per LEGAL_CONSTANTS)','Access-control implementation record'],
+  completionBlockers:['retention period stated below the Art. 26(6) six-month floor with no legal basis for the shorter period'],
+});
+defineContract('P2B','O11',{
+  id:'P2B-O11 Incident and malfunction notification template', purpose:'Art. 26(4) deployer-to-provider notification — distinct from the provider\'s own Art. 73 template (P2A-O18).',
+  templates:['Deployer-to-provider notification form'],
+  procedures:['Provider-notification deadline/escalation procedure'],
+  completionBlockers:['duplicates the P2A-O18 provider-facing template instead of the deployer-to-provider notification'],
+});
+defineContract('P2B','O12',{
+  id:'P2B-O12 Post-deployment monitoring plan', purpose:'Art. 72 deployer-side monitoring distinct from the provider PMS (P2A-O17).',
+  mandatoryTables:['Deployer monitoring indicator table (indicator | threshold | escalation-to-provider trigger)'],
+  completionBlockers:['duplicates P2A-O17 rather than covering deployer-observed operational indicators'],
+});
+defineContract('P2B','O13',{
+  id:'P2B-O13 NIS2 deployer obligations record', purpose:'NIS2 deployer-side obligations (Directive, national transposition).',
+  decisionRecords:['NIS2 deployer obligations record naming the national transposing measure or flagging [OFFICIAL SOURCE VERIFICATION REQUIRED]'],
+  completionBlockers:['NIS2 treated as directly applicable EU Regulation'],
+});
+defineContract('P2B','O14',{
+  id:'P2B-O14 DORA financial-sector obligations record', purpose:'DORA ICT risk-management obligations for in-scope financial entities.',
+  conditionalActivation:{condition:'Deployer is a DORA in-scope financial entity', notApplicableReasonRequired:true},
+  decisionRecords:['DORA applicability determination'],
+});
+defineContract('P2B','O15',{
+  id:'P2B-O15 Fairness monitoring and bias audit record', purpose:'Art. 9(7) & Art. 26 deployer-side fairness/bias monitoring in live operation.',
+  procedures:['Bias-monitoring procedure using real operating data, distinct from pre-deployment testing in P2A-O05'],
+});
+defineContract('P2B','O16',{
+  id:'P2B-O16 GDPR controller compliance package', purpose:'GDPR Arts. 5/6/13/24 deployer-as-controller package — distinct from the provider processor pack (P2A-O20).',
+  templates:['Controller-side ROPA entry','Art. 13 information-notice text'],
+  completionBlockers:['duplicates the P2A processor pack instead of the controller-side package'],
+});
+defineContract('P2B','O17',{
+  id:'P2B-O17 Decommissioning and data-deletion plan', purpose:'Art. 26 & GDPR Art. 5(1)(e) end-of-life plan.',
+  procedures:['Decommissioning procedure with data-deletion/retention-expiry steps'],
+});
+defineContract('P2B','O18',{
+  id:'P2B-O18 Contractual instrument package — deployer side', purpose:'Deployer-side Art. 25 contractual instruments — distinct from the provider-side set (P2A-O25).',
+  templates:['Deployer acceptance of provider instructions','Deployer-side data processing instructions (as controller)','Deployer internal usage-policy instrument'],
+  completionBlockers:['re-uses the provider-side (P2A-O25) instruments unchanged'],
+});
+defineContract('P2B','O19',{
+  id:'P2B-O19 Substantial modification assessment — deployer', purpose:'Art. 25(1) & 6(5) deployer-triggered modification test.',
+  decisionRecords:['Deployer-triggered substantial-modification determination'],
+});
+defineContract('P2B','O20',{
+  id:'P2B-O20 National overlay — deployer perspective', purpose:'Overlay Application Ledger from the deployment-jurisdiction perspective.',
+  registers:['Overlay Application Ledger (deployer perspective)'],
+});
+defineContract('P2B','O21',{
+  id:'P2B-O21 Sector overlay — deployer perspective', purpose:'Overlay Application Ledger from the deployment-sector perspective.',
+  registers:['Overlay Application Ledger (sector, deployer perspective)'],
+});
+defineContract('P2B','O22',{
+  id:'P2B-O22 Executive summary — deployer package', purpose:'Decision-layer summary of the full P2B package.',
+  decisionRecords:['Compact decision layer: result, why, what happens next, legal basis, evidence state, main blockers, five prioritised actions'],
+  visualComponent:'completeness-waterfall',
+  completionBlockers:['summary omits the seven-part decision layer'],
+});
+defineContract('P2B','CSV-A',{ id:'P2B-CSV-A Machine-readable deployer-obligations export', machineReadableAnnex:'p2b-obligations.csv', visualComponent:'none', completionBlockers:['delivered as narrative text instead of actual structured data'] });
+defineContract('P2B','CSV-B',{ id:'P2B-CSV-B Machine-readable bridge-map export', machineReadableAnnex:'p2b-bridge-map.csv', visualComponent:'none', completionBlockers:['delivered as narrative text instead of actual structured data'] });
+
+// ═══════════════════════════ P3 — TRANSPARENCY ═══════════════════════════
+defineContract('P3','G01',{
+  id:'P3-G01 Art. 50(1) AI-interaction disclosure notice', purpose:'Deployable notice disclosing direct AI interaction to natural persons.',
+  templates:['Short notice text','Layered/full notice text','Interface placement and timing specification'],
+  evidenceFields:['WCAG 2.2 accessibility check result','Owner/deployment record'],
+  completionBlockers:['notice text provided with no placement/timing specification'],
+});
+defineContract('P3','G02',{
+  id:'P3-G02 Art. 50(3) emotion-recognition notice', purpose:'Deployable notice for emotion-recognition systems, distinct from biometric-categorisation notice (G03).',
+  templates:['Notice text specific to emotion recognition'],
+  completionBlockers:['notice text identical to the biometric-categorisation notice (G03) with no emotion-recognition-specific content'],
+});
+defineContract('P3','G03',{
+  id:'P3-G03 Art. 50(3) biometric-categorisation notice', purpose:'Deployable notice for biometric-categorisation systems, distinct from emotion-recognition notice (G02).',
+  templates:['Notice text specific to biometric categorisation'],
+  completionBlockers:['notice text identical to G02 with no biometric-categorisation-specific content'],
+});
+defineContract('P3','G04',{
+  id:'P3-G04 Art. 50(4) deepfake/synthetic-content label', purpose:'Deployer-facing disclosure label for synthetic/manipulated content.',
+  templates:['User-facing disclosure label text','Placement/timing specification'],
+  completionBlockers:['label duplicates the provider technical-marking artefact (G05) instead of the deployer-facing disclosure'],
+});
+defineContract('P3','G05',{
+  id:'P3-G05 Art. 50(2) C2PA machine-readable marking (provider)', purpose:'PROVIDER technical machine-readable marking — must not be merged with deployer disclosure duties (G04).',
+  technicalArtefacts:['C2PA/machine-readable marking implementation specification'],
+  completionBlockers:['content is a user-facing disclosure notice rather than the provider technical-marking specification'],
+});
+defineContract('P3','G06',{
+  id:'P3-G06 Art. 26(7) worker notice package', purpose:'Worker-facing notice — cross-referenced to, not a duplicate of, P2B-O07.',
+  templates:['Worker notice text','Representative-consultation evidence reference'],
+  completionBlockers:['no cross-reference to P2B-O07'],
+});
+defineContract('P3','G07',{
+  id:'P3-G07 GPAI transparency notice — Art. 50(1)', purpose:'Notice for GPAI-based interaction, distinct from a general AI-interaction notice (G01).',
+  templates:['GPAI-specific notice text'],
+  conditionalActivation:{condition:'GPAI dependency identified (P1-O06)', notApplicableReasonRequired:true},
+});
+defineContract('P3','G08',{
+  id:'P3-G08 GPAI downstream deployer notice pack', purpose:'Art. 53(1)(b) documentation pack a GPAI provider owes downstream deployers.',
+  templates:['Downstream deployer notice pack contents'],
+  conditionalActivation:{condition:'System profile involves acting as a GPAI provider to downstream deployers', notApplicableReasonRequired:true},
+});
+defineContract('P3','G09',{
+  id:'P3-G09 WCAG 2.2 AA accessibility-aligned notice versions', purpose:'Accessibility-tested versions of the notices produced elsewhere in P3.',
+  evidenceFields:['WCAG 2.2 AA test results per notice'],
+  completionBlockers:['accessibility claimed with no per-notice test result'],
+});
+defineContract('P3','G10',{
+  id:'P3-G10 Multi-language notice package', purpose:'Notices in every language the intended-use-population/IFU requires — not merely the document-generation language.',
+  registers:['Language/version matrix (language | notice | version | owner | last reviewed)'],
+  completionBlockers:['only the single document-generation language provided when multiple IFU languages are required'],
+});
+defineContract('P3','G11',{
+  id:'P3-G11 Art. 50 compliance summary and evidence record', purpose:'Decision-layer summary of the full P3 package plus machine-readable notice register.',
+  decisionRecords:['Compact decision layer: result, why, what happens next, legal basis, evidence state, main blockers, five prioritised actions'],
+  machineReadableAnnex:'p3-notice-register.json',
+  visualComponent:'completeness-waterfall',
+  completionBlockers:['summary omits the seven-part decision layer','no machine-readable notice register'],
+});
+
+// ═══════════════════════════ P4 — MINIMAL RISK / VOLUNTARY GOVERNANCE ═══════════════════════════
+defineContract('P4','UM0',{
+  id:'P4-UM0 Art. 95 minimal-risk affirmation', purpose:'Affirm minimal-risk status without overriding a controlling P1 classification.',
+  decisionRecords:['Minimal-risk affirmation cross-referenced to the P1 classification decision (P1-O13); must state clearly if P1 classification differs and that P4 does not override it'],
+  completionBlockers:['affirmation contradicts or silently overrides the P1-O13 classification'],
+});
+defineContract('P4','UM0B',{
+  id:'P4-UM0B Art. 6(3) exception assessment and determination', purpose:'Reference/repeat the P1-O04 exception record in the P4 package context.',
+  decisionRecords:['Cross-referenced Art. 6(3) determination consistent with P1-O04'],
+  conditionalActivation:{condition:'P1-O04 exception applies', notApplicableReasonRequired:true},
+});
+defineContract('P4','UM0C',{
+  id:'P4-UM0C GPAI provider obligations checklist', purpose:'Residual GPAI checklist for a minimal-risk system with GPAI dependency.',
+  mandatoryTables:['GPAI obligations checklist (obligation | applicable Y/N | status)'],
+  conditionalActivation:{condition:'GPAI dependency identified (P1-O06)', notApplicableReasonRequired:true},
+});
+defineContract('P4','UM1',{
+  id:'P4-UM1 Art. 50 residual transparency notices', purpose:'Residual Art. 50 notices for a minimal-risk system, cross-referenced to P3 where P3 also ran.',
+  templates:['Residual notice text'],
+  completionBlockers:['duplicates full P3 output instead of the residual/cross-reference record'],
+});
+defineContract('P4','UM2',{
+  id:'P4-UM2 GDPR/ePrivacy minimal-risk assessment', purpose:'Lightweight but real GDPR/ePrivacy relevance decision for the minimal-risk system.',
+  decisionRecords:['GDPR/ePrivacy relevance decision'],
+});
+defineContract('P4','UM3',{
+  id:'P4-UM3 Voluntary codes framework (Art. 95/96)', purpose:'Voluntary-control register the organisation can adopt.',
+  registers:['Voluntary-control register (control | rationale | owner | priority | implementation action | evidence artefact | review cadence | status | dependency)'],
+  completionBlockers:['controls listed without owner/evidence/review-cadence fields'],
+});
+defineContract('P4','UM4',{
+  id:'P4-UM4 EU database registration (Art. 6(3) sub-pathway B)', purpose:'Registration package for the narrow Art. 6(3)/49/71 sub-pathway.',
+  templates:['Registration data-entry template'],
+  conditionalActivation:{condition:'Art. 6(3) exception applies via the registrable sub-pathway', notApplicableReasonRequired:true},
+});
+defineContract('P4','UM5',{
+  id:'P4-UM5 National overlay summary', purpose:'Overlay Application Ledger for the minimal-risk package.',
+  registers:['Overlay Application Ledger'],
+});
+defineContract('P4','UM6',{
+  id:'P4-UM6 Executive summary — minimal risk', purpose:'Board-ready decision-layer summary, roadmap and machine-readable control register.',
+  decisionRecords:['Compact decision layer: result, why, what happens next, legal basis, evidence state, main blockers, five prioritised actions'],
+  machineReadableAnnex:'p4-control-register.json',
+  visualComponent:'completeness-waterfall',
+  completionBlockers:['summary omits the seven-part decision layer','no machine-readable control register'],
+});
+defineContract('P4','CSV-A',{ id:'P4-CSV-A Machine-readable minimal-risk-record export', machineReadableAnnex:'p4-minimal-risk.csv', visualComponent:'none', completionBlockers:['delivered as narrative text instead of actual structured data'] });
+defineContract('P4','CSV-B',{ id:'P4-CSV-B Machine-readable voluntary-commitments export', machineReadableAnnex:'p4-voluntary-commitments.csv', visualComponent:'none', completionBlockers:['delivered as narrative text instead of actual structured data'] });
+
+// ── STRUCTURAL PRESENCE CHECK ──
+// Heuristic, not semantic: checks whether at least half of a requirement's
+// significant (>=4 char, non-stopword) terms literally occur in the
+// generated text. This can be fooled by a document that mentions the right
+// words without the real artefact, and can be triggered by phrasing this
+// registry's authors did not anticipate — it is a structural completeness
+// signal for human review, not proof of legal correctness or a substitute
+// for actually reading the output.
+const _CONTRACT_STOPWORDS = new Set(['with','from','into','that','this','than','then','have','shall','must','where','which','their','about','after','before','without','using','used','per','the','and','for','not','are','was','were','been','being','each','every','both','only','also','such','when','where','being','will']);
+function _signatureWords(label){
+  return String(label||'')
+    .replace(/\([^)]*\)/g,' ')
+    .split(/[^A-Za-z0-9]+/)
+    .filter(w=>w.length>=4 && !_CONTRACT_STOPWORDS.has(w.toLowerCase()))
+    .slice(0,8);
+}
+function _artefactPresent(label, textLower){
+  const words=_signatureWords(label);
+  if(!words.length) return true;
+  const hits=words.filter(w=>textLower.includes(w.toLowerCase()));
+  return (hits.length/words.length) >= 0.5;
+}
+
+// ── LAYERED VALIDATOR — output-specific acceptance layer ──
+// Runs AFTER validateGeneratedOutput (which stays as the technical
+// completeness check: empty/error/placeholder/abrupt-ending). This layer
+// checks REGULATORY ACCEPTANCE: does the artefact contain what its
+// contract requires. The two are deliberately kept separate (see
+// out.acceptance vs out.validation at the call site) so "generation
+// completion" is never silently redefined as "regulatory readiness".
+function validateOutputAcceptance(pillar, code, text, ctx){
+  ctx = ctx || {};
+  const contract = OUTPUT_ACCEPTANCE_CONTRACTS[pillar] && OUTPUT_ACCEPTANCE_CONTRACTS[pillar][code];
+  if(!contract){
+    return {status:'ACCEPTED', contractId:null, contractMissing:true, missingArtefacts:[], legalConstantViolations:[], unsupportedStatusClaims:[], overlap:{ratio:0,flagged:false}, notApplicable:false};
+  }
+  const trimmed = String(text||'').trim();
+  const textLower = trimmed.toLowerCase();
+
+  const declaresNotApplicable = /\bNOT\s+APPLICABLE\b/i.test(trimmed) && /\breason\b|\bbecause\b|\bdoes not\b|\bno\s+(applicable|trigger)/i.test(trimmed);
+  if(contract.conditionalActivation && declaresNotApplicable){
+    return {status:'NOT_APPLICABLE', contractId:contract.id, missingArtefacts:[], legalConstantViolations:[], unsupportedStatusClaims:[], overlap:{ratio:0,flagged:false}, notApplicable:true};
+  }
+
+  const allRequirements = [].concat(
+    contract.requiredArtefacts||[], contract.mandatoryTables||[], contract.decisionRecords||[],
+    contract.procedures||[], contract.registers||[], contract.templates||[],
+    contract.technicalArtefacts||[], contract.operationalArtefacts||[], contract.evidenceFields||[]
+  );
+  const missingArtefacts = allRequirements.filter(req=>!_artefactPresent(req, textLower));
+
+  const legalConstantViolations = checkLegalConstantViolations(trimmed);
+  const unsupportedStatusClaims = scanUnsupportedStatusClaims(trimmed, ctx.inputSnapshot);
+  const overlapInfo = computeSubstantiveOverlapRatio(trimmed, ctx.priorTexts||[]);
+  const overlapFlagged = overlapInfo.ratio > 0.35;
+
+  const bodyLines = trimmed.split(/\n/).filter(l=>l.trim());
+  const isBareOutline = /^#+\s*(table of contents|outline|overview)\s*$/im.test(trimmed) && bodyLines.length < 25;
+
+  const blocked = missingArtefacts.length>0 || legalConstantViolations.length>0 || overlapFlagged || isBareOutline;
+
+  return {
+    status: blocked ? 'BLOCKED' : 'ACCEPTED',
+    contractId: contract.id,
+    missingArtefacts, legalConstantViolations, unsupportedStatusClaims,
+    overlap:{ratio:overlapInfo.ratio, copiedLines:overlapInfo.copiedLines, totalLines:overlapInfo.totalLines, flagged:overlapFlagged},
+    isBareOutline, notApplicable:false,
+  };
+}
+
+// Renders the contract's requirements as a prompt instruction fragment so
+// the model is told, in the same terms the validator will check, what the
+// artefact must contain. Single source of truth: contract data drives both
+// the ask (this function) and the check (validateOutputAcceptance above).
+function buildOutputAcceptanceInstruction(pillar, code){
+  const c = OUTPUT_ACCEPTANCE_CONTRACTS[pillar] && OUTPUT_ACCEPTANCE_CONTRACTS[pillar][code];
+  if(!c) return '';
+  const section=(label,items)=> (items&&items.length) ? `\n${label}:\n`+items.map(i=>'- '+i).join('\n') : '';
+  const conditional = c.conditionalActivation
+    ? `\n\nCONDITIONAL ACTIVATION: This artefact applies only when: ${c.conditionalActivation.condition}. If that condition is not met, state "NOT APPLICABLE" with the specific reason instead of generating the full artefact.`
+    : '';
+  return `\n\n===== OUTPUT ACCEPTANCE CONTRACT — MANDATORY ARTEFACTS FOR ${pillar}-${code} =====\nThis artefact is only accepted as complete if it actually contains the following (not merely mentions or summarises them):${section('Required tables',c.mandatoryTables)}${section('Required decision records',c.decisionRecords)}${section('Required procedures',c.procedures)}${section('Required registers',c.registers)}${section('Required templates',c.templates)}${section('Required technical artefacts',c.technicalArtefacts)}${section('Required operational artefacts',c.operationalArtefacts)}${section('Required evidence fields',c.evidenceFields)}${section('Required machine-readable annex',c.machineReadableAnnex?[c.machineReadableAnnex]:[])}\nDo not substitute any of the above with: ${(c.prohibitedSubstitutes||[]).join('; ')}.${conditional}\n===== END OUTPUT ACCEPTANCE CONTRACT =====`;
+}
+
 
 // Per-output token budget — replaces the previous fixed 8192 cap, which
 // silently truncated any output that needed more (a "Complete Provider
@@ -6307,6 +7096,19 @@ async function execApiMode(idx, signal){
   out.estimatedPages=validation.estimatedPages;
   out.continuationCount=0;
 
+  // Output-specific acceptance contract check — deliberately kept separate
+  // from out.state (generation/execution completion, below) rather than
+  // folded into it. out.state answers "did the API call finish and return
+  // text"; out.acceptance answers "does the artefact contain what its
+  // contract requires". Collapsing these into one flag was the exact
+  // "COMPLETE just because text was generated" problem this layer exists
+  // to fix — see buildExecutiveDashboard / the KPI strip for how the two
+  // are surfaced without contradicting each other.
+  out.acceptance = validateOutputAcceptance(exec.pillar, out.code, text, {
+    inputSnapshot: getExecutionInputData(),
+    priorTexts: exec.outputs.filter(o=>o.code!==out.code && o.content).map(o=>o.content),
+  });
+
   // Proven legacy behaviour: any successful non-empty response is complete.
   // stop_reason is retained in telemetry for review, but it never blocks the
   // sequence and never triggers a paid continuation or regeneration.
@@ -6346,6 +7148,10 @@ async function execClaudeMode(idx){
         out.model = 'manual-paste';
         out.generatedAt = new Date().toISOString();
         out.validation = validateGeneratedOutput(exec.pillar, out.code, out.content, {});
+        out.acceptance = validateOutputAcceptance(exec.pillar, out.code, out.content, {
+          inputSnapshot: getExecutionInputData(),
+          priorTexts: exec.outputs.filter(o=>o.code!==out.code && o.content).map(o=>o.content),
+        });
         out.wordCount = out.validation.wordCount;
         out.estimatedPages = out.validation.estimatedPages;
         out.state = out.validation.valid ? 'complete' : 'error';
@@ -6778,7 +7584,7 @@ function buildOverlayExecutionContext(pillar){
   const sourceMode=supplied.length
     ? `USER-SUPPLIED COMBINED OVERLAY DETECTED: ${supplied.map(a=>a.name).join(', ')}. Validate it against the profile, jurisdiction, sector and source hierarchy. Use it where consistent; supplement only missing components and record every conflict or gap.`
     : 'NO USER-SUPPLIED COMBINED OVERLAY DETECTED. First generate the required overlay context from the Family H Country, Sector and Combined Sector × Country template logic, then apply it to the requested artefact during this same execution.';
-  return `\n\n===== OVERLAY RESOLUTION AND APPLICATION — MANDATORY =====\n${relevance}\nResolved countries: ${resolved.countries.length?resolved.countries.join('; '):'[NO SPECIFIC COUNTRY RESOLVED]'}\nResolved sectors/sub-sectors: ${resolved.sectors.length?resolved.sectors.join('; '):'[NO SPECIFIC SECTOR RESOLVED]'}\nResolved cross-sector/product regimes: ${resolved.regimes.length?resolved.regimes.join('; '):'[NONE EXPRESSLY SELECTED — DISCOVERY STILL REQUIRED]'}\nResolved AI Act special contexts: ${resolved.specialContexts.length?resolved.specialContexts.join('; '):'[NONE EXPRESSLY SELECTED — ARTICLE 5/6/50 TESTS STILL REQUIRED]'}\nOpen/unlisted context: ${resolved.openContext||'[NONE PROVIDED]'}\nDerived combinations: ${resolved.combinations.length?resolved.combinations.join('; '):'[NO COMBINATION RESOLVED]'}\n${sourceMode}\nEXECUTION ORDER:\n1. Resolve each country context separately.\n2. Resolve each sector and legally distinct sub-sector separately.\n3. For critical infrastructure, do not collapse domains: separately assess electricity/energy, drinking water, wastewater, data centres/colocation, road, rail, aviation, maritime/ports/inland waterways and urban/public transport. Data-centre or colocation qualification is fact-dependent: assess service type, facility role, data origin, data flows, customer/entity status and applicable national transposition; never assume critical-infrastructure status from the label alone.\n4. Test explicit AI Act contexts across the Regulation, including Article 5 prohibitions, Article 6 and Annex I/III high-risk routes, public-authority/FRIA consequences and Article 50 transparency. A selected sector never predetermines classification.\n5. Derive only necessary sector × country combinations; never rely on a finite hard-coded catalogue.\n6. Where the listed taxonomy is incomplete, use the system description, intended purpose, data origin, deployment model, attachments and open-context input to identify additional Union, national and sectoral legislation. Absence from the UI list is never a basis for concluding that no overlay applies.\n7. Check contradictions between country, sector, combined overlay, system profile, P1 and attachments. Preserve all applicable binding rules and apply the stricter operational requirement unless conflict-of-laws analysis dictates otherwise.\n8. Apply the resolved overlay with primary operational weight in P2A/P2B and consequential relevance in P1, P3 and P4.\n9. Use national laws, authorities, deadlines or enforcement claims only when supported by an official source supplied in canonical material, user input or attachment; otherwise mark [OFFICIAL SOURCE VERIFICATION REQUIRED].\n10. Gaps or contradictions never block output. Deliver with an Overlay Resolution Record describing inputs, generated/supplied status, conflicts, source gaps and effect on the artefact.\n===== END OVERLAY RESOLUTION AND APPLICATION =====`;
+  return `\n\n===== OVERLAY RESOLUTION AND APPLICATION — MANDATORY =====\n${relevance}\nResolved countries: ${resolved.countries.length?resolved.countries.join('; '):'[NO SPECIFIC COUNTRY RESOLVED]'}\nResolved sectors/sub-sectors: ${resolved.sectors.length?resolved.sectors.join('; '):'[NO SPECIFIC SECTOR RESOLVED]'}\nResolved cross-sector/product regimes: ${resolved.regimes.length?resolved.regimes.join('; '):'[NONE EXPRESSLY SELECTED — DISCOVERY STILL REQUIRED]'}\nResolved AI Act special contexts: ${resolved.specialContexts.length?resolved.specialContexts.join('; '):'[NONE EXPRESSLY SELECTED — ARTICLE 5/6/50 TESTS STILL REQUIRED]'}\nOpen/unlisted context: ${resolved.openContext||'[NONE PROVIDED]'}\nDerived combinations: ${resolved.combinations.length?resolved.combinations.join('; '):'[NO COMBINATION RESOLVED]'}\n${sourceMode}\nEXECUTION ORDER:\n1. Resolve each country context separately.\n2. Resolve each sector and legally distinct sub-sector separately.\n3. For critical infrastructure, do not collapse domains: separately assess electricity/energy, drinking water, wastewater, data centres/colocation, road, rail, aviation, maritime/ports/inland waterways and urban/public transport. Data-centre or colocation qualification is fact-dependent: assess service type, facility role, data origin, data flows, customer/entity status and applicable national transposition; never assume critical-infrastructure status from the label alone.\n4. Test explicit AI Act contexts across the Regulation, including Article 5 prohibitions, Article 6 and Annex I/III high-risk routes, public-authority/FRIA consequences and Article 50 transparency. A selected sector never predetermines classification.\n5. Derive only necessary sector × country combinations; never rely on a finite hard-coded catalogue.\n6. Where the listed taxonomy is incomplete, use the system description, intended purpose, data origin, deployment model, attachments and open-context input to identify additional Union, national and sectoral legislation. Absence from the UI list is never a basis for concluding that no overlay applies.\n7. Check contradictions between country, sector, combined overlay, system profile, P1 and attachments. Preserve all applicable binding rules and apply the stricter operational requirement unless conflict-of-laws analysis dictates otherwise.\n8. Apply the resolved overlay with primary operational weight in P2A/P2B and consequential relevance in P1, P3 and P4.\n9. Use national laws, authorities, deadlines or enforcement claims only when supported by an official source supplied in canonical material, user input or attachment; otherwise mark [OFFICIAL SOURCE VERIFICATION REQUIRED].\n10. Gaps or contradictions never block output. Deliver with an Overlay Resolution Record describing inputs, generated/supplied status, conflicts, source gaps and effect on the artefact.\n11. Where this output's acceptance contract requires an Overlay Application Ledger, render it as an actual table with these exact columns — Overlay rule | Source | Trigger | Effect on output | Control | Evidence | Status — using only these Status values: APPLIED, NOT APPLICABLE — REASON, VERIFICATION REQUIRED, CONFLICT DETECTED. Every resolved regime/context/combination above must appear as its own row; do not render it as a descriptive paragraph instead of a table.\n===== END OVERLAY RESOLUTION AND APPLICATION =====`;
 }
 
 function buildOutputPrompt(idx){
@@ -6793,10 +7599,14 @@ function buildOutputPrompt(idx){
     ? '\nREFERENCE ATTACHMENTS — LOCALLY EXTRACTED TEXT; USE ONLY WHERE RELEVANT; APPLY SOURCE-STATUS AND NO-FABRICATION RULES:\n'+textAttachments.map(a=>'===== '+a.name+(a.truncated?' [TRUNCATED]':'')+' =====\n'+a.text+'\n===== END =====').join('\n\n')
     : '';
   const overlayCtx=buildOverlayExecutionContext(pillar);
-  return `EXECUTE ${pillar} OUTPUT ${out.code} IN FULL\nTITLE: ${out.title}\nOUTPUT CATALOGUE LEGAL-BASIS SIGNAL (NON-AUTHORITATIVE UNTIL CHECKED AGAINST THE GLOBAL SOURCE POLICY): ${out.article||'See current output specification'}${typicalPages}\n\nSYSTEM PROFILE — USER-SUPPLIED INPUT:\n${intake}${attachCtx}${overlayCtx}\n\nGenerate the complete substantive artefact now. Apply the Global Regulatory Governance layer before every legacy instruction. Preserve all distinct legal provisions and operational consequences; do not repeat content that adds no new value, and do not consolidate or omit requirements merely because they arise under the same legal instrument.
+  const acceptanceCtx=buildOutputAcceptanceInstruction(pillar, out.code);
+  return `EXECUTE ${pillar} OUTPUT ${out.code} IN FULL\nTITLE: ${out.title}\nOUTPUT CATALOGUE LEGAL-BASIS SIGNAL (NON-AUTHORITATIVE UNTIL CHECKED AGAINST THE GLOBAL SOURCE POLICY): ${out.article||'See current output specification'}${typicalPages}\n\nSYSTEM PROFILE — USER-SUPPLIED INPUT:\n${intake}${attachCtx}${overlayCtx}${acceptanceCtx}\n\nGenerate the complete substantive artefact now. Apply the Global Regulatory Governance layer before every legacy instruction. Preserve all distinct legal provisions and operational consequences; do not repeat content that adds no new value, and do not consolidate or omit requirements merely because they arise under the same legal instrument.
 
 ATTACHMENT TRACEABILITY — REQUIRED WHEN ATTACHMENTS ARE SUPPLIED:
-Add a final “Source & Attachment Register” that lists every supplied attachment by filename, attachment type, processing status, purpose, whether it was used in reasoning, evidentiary status (USER-SUPPLIED / CONTEXT ONLY / EXCLUDED), confidence and exclusion reason where applicable. Do not claim an attachment was considered unless it appears in this register.`;
+Add a final “Source & Attachment Register” that lists every supplied attachment by filename, attachment type, processing status, purpose, whether it was used in reasoning, evidentiary status (USER-SUPPLIED / CONTEXT ONLY / EXCLUDED), confidence and exclusion reason where applicable. Do not claim an attachment was considered unless it appears in this register.
+
+PROVENANCE TAGGING — REQUIRED FOR MATERIAL FACTUAL ASSERTIONS:
+Tag material factual assertions (numbers, identities, organisations, authorities, certifications, technical architecture, infrastructure, volumes, test results, implementation status) with one of: USER_SUPPLIED, ATTACHMENT_SUPPORTED, SYSTEM_DERIVED, OFFICIAL_SOURCE, ASSUMPTION, NOT_ESTABLISHED. Never state that something is implemented, certified, verified, tested, approved, operational, active, compliant or production-ready unless that status is USER_SUPPLIED or ATTACHMENT_SUPPORTED — otherwise mark it NOT_ESTABLISHED / REQUIRED.`;
 }
 
 function buildMessageHistory(idx){
