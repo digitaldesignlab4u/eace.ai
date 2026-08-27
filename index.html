@@ -6839,6 +6839,15 @@ function validateOutputAcceptance(pillar, code, text, ctx){
   );
   const missingArtefacts = allRequirements.filter(req=>!_artefactPresent(req, textLower));
 
+  // Human approval/signature fields are tracked as their OWN dimension,
+  // never folded into missingArtefacts: a drafting-complete, structurally
+  // sound artefact that is merely awaiting a human signature is not
+  // "broken" the way a missing JSON Schema or table is. Both still count
+  // as "material completion actions open" at the dashboard level (Section
+  // 14), but they are different kinds of open action and must stay
+  // distinguishable to a reviewer.
+  const approvalFieldsPending = (contract.approvalFields||[]).filter(f=>!_artefactPresent(f, textLower));
+
   const legalConstantViolations = checkLegalConstantViolations(trimmed);
   const unsupportedStatusClaims = scanUnsupportedStatusClaims(trimmed, ctx.inputSnapshot);
   const overlapInfo = computeSubstantiveOverlapRatio(trimmed, ctx.priorTexts||[]);
@@ -6847,12 +6856,13 @@ function validateOutputAcceptance(pillar, code, text, ctx){
   const bodyLines = trimmed.split(/\n/).filter(l=>l.trim());
   const isBareOutline = /^#+\s*(table of contents|outline|overview)\s*$/im.test(trimmed) && bodyLines.length < 25;
 
-  const blocked = missingArtefacts.length>0 || legalConstantViolations.length>0 || overlapFlagged || isBareOutline;
+  const structurallyBlocked = missingArtefacts.length>0 || legalConstantViolations.length>0 || overlapFlagged || isBareOutline;
+  const status = structurallyBlocked ? 'BLOCKED' : approvalFieldsPending.length>0 ? 'ACCEPTED_PENDING_APPROVAL' : 'ACCEPTED';
 
   return {
-    status: blocked ? 'BLOCKED' : 'ACCEPTED',
+    status,
     contractId: contract.id,
-    missingArtefacts, legalConstantViolations, unsupportedStatusClaims,
+    missingArtefacts, legalConstantViolations, unsupportedStatusClaims, approvalFieldsPending,
     overlap:{ratio:overlapInfo.ratio, copiedLines:overlapInfo.copiedLines, totalLines:overlapInfo.totalLines, flagged:overlapFlagged},
     isBareOutline, notApplicable:false,
   };
@@ -11633,13 +11643,35 @@ function buildExecutiveDashboard(sys, pillar){
   // flagged yet; ACTION REQUIRED means a concrete unresolved action exists.
   const hasActionRequired = pillarRows.some(r=>r.actionRequired);
   const hasIncomplete     = pillarRows.some(r=>!r.completed);
+
+  // Regulatory readiness is a SEPARATE axis from determination completion
+  // above: a pillar can have every determination reached (all pillarRows
+  // complete, no action required) while its generated documents still
+  // fail their own output acceptance contracts (missing mandatory
+  // artefacts, an unresolved legal-constant conflict, excessive
+  // repetition). Generation completion (docsCount, "the model returned
+  // text") is tracked separately again — a document can be generation-
+  // complete and still acceptance-BLOCKED. Never collapse these into one
+  // percentage.
+  const generatedDocs   = outs.filter(o=>o.state==='done'||o.state==='complete');
+  const docsCount       = generatedDocs.length;
+  const docsWithContract = generatedDocs.filter(o=>o.acceptance && o.acceptance.contractId);
+  const docsBlocked     = docsWithContract.filter(o=>o.acceptance.status==='BLOCKED');
+  const docsPendingApproval = docsWithContract.filter(o=>o.acceptance.status==='ACCEPTED_PENDING_APPROVAL');
+  const docsAccepted    = docsWithContract.filter(o=>o.acceptance.status==='ACCEPTED');
+  // Human approval status (Section 14, 4th axis): pending signatures are a
+  // real open action, but a DIFFERENT kind of open action than a
+  // structurally broken artefact — kept in its own bucket rather than
+  // merged into docsBlocked so the panel below can label each correctly.
+  const regulatoryReadinessOpen = docsBlocked.length>0 || docsPendingApproval.length>0;
+
   const overall = hasActionRequired ? {label:'ACTION REQUIRED', color:'var(--red)'}
                 : hasIncomplete ? {label:'IN PROGRESS', color:'var(--status-progress)'}
+                : regulatoryReadinessOpen ? {label:'GENERATED DRAFT — MATERIAL COMPLETION ACTIONS OPEN', color:'var(--status-review)'}
                 : {label:'COMPLETE', color:'var(--green)'};
 
   const completedCount = pillarRows.filter(r=>r.completed).length;
   const actionCount    = pillarRows.filter(r=>r.actionRequired).length;
-  const docsCount       = outs.filter(o=>o.state==='done'||o.state==='complete').length;
 
   // Group rows in first-seen order so each pillar's own category sequence
   // (defined above) drives the layout, not object-key iteration order.
@@ -11669,7 +11701,22 @@ function buildExecutiveDashboard(sys, pillar){
       ${kpiTile('Determinations completed', `${completedCount} / ${pillarRows.length}`)}
       ${kpiTile('Documents generated', docsCount)}
       ${kpiTile('Actions required', actionCount, actionCount?'var(--red)':'var(--ink)')}
+      ${docsWithContract.length ? kpiTile('Regulatory readiness', `${docsAccepted.length} / ${docsWithContract.length} accepted`, docsBlocked.length?'var(--status-review)':'var(--ink)') : ''}
     </div>
+    ${docsBlocked.length ? `
+    <div style="background:rgba(224,138,46,0.08);border:0.5px solid var(--status-review);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:10px;">
+      <div style="font-family:var(--font-mono),monospace;font-size:8.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--status-review);margin-bottom:6px;">Material completion actions open — generated but not yet acceptance-ready</div>
+      ${docsBlocked.map(o=>{
+        const a=o.acceptance||{};
+        const gaps=[].concat(a.missingArtefacts||[], a.legalConstantViolations||[], (a.overlap&&a.overlap.flagged)?['Excessive overlap with another output ('+Math.round(a.overlap.ratio*100)+'%)']:[]);
+        return `<div style="font-size:11.5px;color:var(--muted);margin-bottom:4px;"><b style="color:var(--ink);">${esc(o.code)}</b> — ${esc(gaps.slice(0,3).join('; ')||'acceptance check failed')}${gaps.length>3?' …':''}</div>`;
+      }).join('')}
+    </div>` : ''}
+    ${docsPendingApproval.length ? `
+    <div style="background:rgba(211,168,74,0.08);border:0.5px solid var(--status-progress);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:18px;">
+      <div style="font-family:var(--font-mono),monospace;font-size:8.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--status-progress);margin-bottom:6px;">Human approval status — drafting complete, signature/approval field(s) not yet evidenced</div>
+      ${docsPendingApproval.map(o=>`<div style="font-size:11.5px;color:var(--muted);margin-bottom:4px;"><b style="color:var(--ink);">${esc(o.code)}</b> — awaiting: ${esc((o.acceptance.approvalFieldsPending||[]).join('; '))}</div>`).join('')}
+    </div>` : ''}
     ${groupOrder.map(group=>`
     <div style="margin-bottom:14px;">
       <div style="font-family:var(--font-mono),monospace;font-size:8px;letter-spacing:0.12em;text-transform:uppercase;color:var(--faint);padding-bottom:5px;margin-bottom:6px;border-bottom:0.5px solid var(--border-2);">${esc(group)}</div>
@@ -11893,7 +11940,7 @@ function persistCompletedExecOutput(out){
       pages:out.estimatedPages||out.pages||0, content:out.content||'', state:'complete',
       wordCount:out.wordCount||0, estimatedPages:out.estimatedPages||0, model:out.model||'',
       stopReason:out.stopReason||null, continuationCount:out.continuationCount||0,
-      validation:out.validation||null, telemetry:out.telemetry||[],
+      validation:out.validation||null, acceptance:out.acceptance||null, telemetry:out.telemetry||[],
       ts:out.generatedAt||new Date().toISOString(),
       evidenceId:'EV-'+exec.pillar+'-'+out.code+'-'+Date.now()
     };
