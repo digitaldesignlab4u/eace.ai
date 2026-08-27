@@ -3159,7 +3159,7 @@ const FIELD_SCHEMA = {
     example:'Yes — full audit logging', source:'sys'},
   logRetention:    {id:'logRetention',    label:'Log retention period',      type:'select',
     opts:['6 months','1 year','2 years','3 years','5 years','10 years','Indefinite','Unknown'],
-    help:'Duration for which logs are retained — minimum 6 months for high-risk AI per Art. 12(1).',
+    help:'Duration for which logs are retained — minimum 6 months for high-risk AI per Art. 19 (providers) / Art. 26(6) (deployers). Art. 12 only requires logging capability to exist, not a retention duration.',
     example:'3 years',                   source:'sys'},
   incidentResponse:{id:'incidentResponse',label:'Incident response process', type:'select',
     opts:['Yes — documented and tested','Yes — documented','Informal process','No','Unknown'],
@@ -3963,13 +3963,6 @@ const schema = Object.fromEntries(
   })
 );
 
-const SEED = [
-  {id:'sys_s1',name:'Recruitment scoring AI',pillar:'P2A',risk:'High-risk',status:'Audit-ready',docs:31,style:'regulator',ran:{P2A:Date.now()-864e5*3},step:0,data:{sysName:'Recruitment scoring AI',sector:['Employment / HR'],criticality:'HIGH'}},
-  {id:'sys_s2',name:'Customer churn predictor',pillar:'P1',risk:'Limited',status:'In progress',docs:14,style:'regulator',ran:{P1:Date.now()-864e5},step:2,data:{sysName:'Customer churn predictor',sector:['Finance / Banking / AML']}},
-  {id:'sys_s3',name:'Medical triage assistant',pillar:'P2B',risk:'High-risk',status:'Pending',docs:0,style:'regulator',ran:{},step:0,data:{sysName:'Medical triage assistant',sector:['Healthcare / MedTech']}},
-  {id:'sys_s4',name:'Invoice processing bot',pillar:'P4',risk:'Minimal',status:'Draft',docs:0,style:'regulator',ran:{},step:0,data:{sysName:'Invoice processing bot',sector:['Finance / Banking / AML']}},
-];
-
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 // aj(): safe replacement for JSON.stringify() when embedding a value inside a
 // double-quoted HTML attribute (onclick="...", onchange="...", onblur="...").
@@ -4013,7 +4006,11 @@ function sf(id,v){
   }, 120);
 }
 
-function loadSystems(){try{const r=localStorage.getItem(LS_KEY);if(r){const p=JSON.parse(r);st.systems=p.systems||SEED;st.activeId=p.activeId||(st.systems[0]&&st.systems[0].id);}else{st.systems=JSON.parse(JSON.stringify(SEED));st.activeId=st.systems[0]?.id;}}catch(e){st.systems=JSON.parse(JSON.stringify(SEED));st.activeId=st.systems[0]?.id;}}
+// A fresh install (no saved localStorage yet) starts with zero systems, not
+// fabricated placeholder entries — the empty-state UI ("No systems yet")
+// handles that case, and showing fake "Audit-ready"/"31 docs" data by
+// default would be indistinguishable from real regulatory status.
+function loadSystems(){try{const r=localStorage.getItem(LS_KEY);if(r){const p=JSON.parse(r);st.systems=p.systems||[];st.activeId=p.activeId||(st.systems[0]&&st.systems[0].id);}else{st.systems=[];st.activeId=null;}}catch(e){st.systems=[];st.activeId=null;}}
 // saveSystems replaced by session architecture
 
 function syncActive(){const sys=st.systems.find(s=>s.id===st.activeId);if(sys){sys.data=Object.assign({},st.data);sys.pillar=st.pillar;sys.step=st.step;sys.style=st.docStyle;sys.ran=st.ran;sys.name=st.data.sysName||sys.name;}return st.systems;}
@@ -5729,6 +5726,7 @@ function saveExecState(){
         telemetry:         o.telemetry||[],
         manualRetryCount:  o.manualRetryCount||0,
         interrupted:       !!o.interrupted,
+        acceptance:        o.acceptance||null,
       })),
       lastCheckpointReason: exec.lastCheckpointReason||'',
       lastCheckpointAt: exec.lastCheckpointAt||Date.now(),
@@ -5889,6 +5887,7 @@ function runEngine(){
         manualRetryCount:  sv.manualRetryCount||0,
         interrupted:       !!sv.interrupted,
         lastUsage:         sv.usage||null,
+        acceptance:        sv.acceptance||null,
       };
     });
     const firstUnfinished = exec.outputs.findIndex(o=>o.state!=='complete');
@@ -6903,11 +6902,29 @@ function _signatureWords(label){
     .filter(w=>w.length>=4 && !_CONTRACT_STOPWORDS.has(w.toLowerCase()))
     .slice(0,8);
 }
+// Negation cues checked around a matched artefact mention — word-overlap
+// alone can't distinguish "JSON Schema is required but not provided" from
+// an actual JSON Schema being present, since both sentences contain the
+// same significant words.
+const _ARTEFACT_NEGATION_CUES = /\b(not provided|not included|not present|not attached|not available|not generated|not applicable here|is missing|are missing|is absent|lacks a|lacking a|excludes the|does not include|doesn't include|has not been (provided|included|generated|attached)|no such|without a|not yet (provided|available|generated))\b/i;
+
 function _artefactPresent(label, textLower){
   const words=_signatureWords(label);
   if(!words.length) return true;
   const hits=words.filter(w=>textLower.includes(w.toLowerCase()));
-  return (hits.length/words.length) >= 0.5;
+  if((hits.length/words.length) < 0.5) return false;
+  // Localize to the sentence(s) that actually contain the matched words, and
+  // only treat the artefact as absent if EVERY such mention is negated —
+  // a text that both claims omission somewhere AND affirmatively includes
+  // the artefact elsewhere still counts as present.
+  const sentences = textLower.split(/[.\n]/);
+  const candidateSentences = sentences.filter(s=>{
+    const sHits = words.filter(w=>s.includes(w.toLowerCase()));
+    return (sHits.length/words.length) >= 0.5;
+  });
+  if(!candidateSentences.length) return true;
+  const allNegated = candidateSentences.every(s=>_ARTEFACT_NEGATION_CUES.test(s));
+  return !allNegated;
 }
 
 // ── LAYERED VALIDATOR — output-specific acceptance layer ──
