@@ -6856,13 +6856,26 @@ function validateOutputAcceptance(pillar, code, text, ctx){
   const bodyLines = trimmed.split(/\n/).filter(l=>l.trim());
   const isBareOutline = /^#+\s*(table of contents|outline|overview)\s*$/im.test(trimmed) && bodyLines.length < 25;
 
-  const structurallyBlocked = missingArtefacts.length>0 || legalConstantViolations.length>0 || overlapFlagged || isBareOutline;
+  // Opening decision layer (Section 12): required on every substantive
+  // artefact (visualComponent !== 'none' - CSV/JSON-only exports are
+  // exempt since they have no prose body to open with one). Checked as a
+  // set of topic markers rather than the literal numbered labels, since a
+  // well-formed table/definition-list covering the same seven points
+  // should not be penalised for not using these exact words.
+  const decisionLayerMarkers = [/result/i, /why|reason/i, /next|routing|consequence/i, /legal basis|article|art\.?\s*\d/i, /evidence/i, /blocker/i, /action/i];
+  const needsDecisionLayer = contract.visualComponent!=='none';
+  const decisionLayerMissing = needsDecisionLayer && (function(){
+    const head = trimmed.slice(0, Math.min(trimmed.length, 1600)); // opening section only
+    return decisionLayerMarkers.filter(re=>!re.test(head)).length > 2; // tolerant: allow up to 2 of 7 to be phrased differently
+  })();
+
+  const structurallyBlocked = missingArtefacts.length>0 || legalConstantViolations.length>0 || overlapFlagged || isBareOutline || decisionLayerMissing;
   const status = structurallyBlocked ? 'BLOCKED' : approvalFieldsPending.length>0 ? 'ACCEPTED_PENDING_APPROVAL' : 'ACCEPTED';
 
   return {
     status,
     contractId: contract.id,
-    missingArtefacts, legalConstantViolations, unsupportedStatusClaims, approvalFieldsPending,
+    missingArtefacts, legalConstantViolations, unsupportedStatusClaims, approvalFieldsPending, decisionLayerMissing,
     overlap:{ratio:overlapInfo.ratio, copiedLines:overlapInfo.copiedLines, totalLines:overlapInfo.totalLines, flagged:overlapFlagged},
     isBareOutline, notApplicable:false,
   };
@@ -7619,7 +7632,10 @@ ATTACHMENT TRACEABILITY — REQUIRED WHEN ATTACHMENTS ARE SUPPLIED:
 Add a final “Source & Attachment Register” that lists every supplied attachment by filename, attachment type, processing status, purpose, whether it was used in reasoning, evidentiary status (USER-SUPPLIED / CONTEXT ONLY / EXCLUDED), confidence and exclusion reason where applicable. Do not claim an attachment was considered unless it appears in this register.
 
 PROVENANCE TAGGING — REQUIRED FOR MATERIAL FACTUAL ASSERTIONS:
-Tag material factual assertions (numbers, identities, organisations, authorities, certifications, technical architecture, infrastructure, volumes, test results, implementation status) with one of: USER_SUPPLIED, ATTACHMENT_SUPPORTED, SYSTEM_DERIVED, OFFICIAL_SOURCE, ASSUMPTION, NOT_ESTABLISHED. Never state that something is implemented, certified, verified, tested, approved, operational, active, compliant or production-ready unless that status is USER_SUPPLIED or ATTACHMENT_SUPPORTED — otherwise mark it NOT_ESTABLISHED / REQUIRED.`;
+Tag material factual assertions (numbers, identities, organisations, authorities, certifications, technical architecture, infrastructure, volumes, test results, implementation status) with one of: USER_SUPPLIED, ATTACHMENT_SUPPORTED, SYSTEM_DERIVED, OFFICIAL_SOURCE, ASSUMPTION, NOT_ESTABLISHED. Never state that something is implemented, certified, verified, tested, approved, operational, active, compliant or production-ready unless that status is USER_SUPPLIED or ATTACHMENT_SUPPORTED — otherwise mark it NOT_ESTABLISHED / REQUIRED.
+
+OPENING DECISION LAYER — MANDATORY FIRST SECTION OF THE ARTEFACT:
+Before the full artefact body, open with a compact decision layer covering exactly these seven points, in this order: (1) Result — the substantive determination in EACE's own terms, never a generic yes/no; (2) Why — the operative legal test and facts that produced it; (3) What happens next — the immediate downstream consequence or routing; (4) Legal basis — the specific Article/Annex/paragraph; (5) Evidence state — what is USER_SUPPLIED/ATTACHMENT_SUPPORTED versus still required; (6) Main blockers — named, specific, not generic; (7) Five prioritised actions — concrete, owned, sequenced. Render it as a short table or definition list, not a paragraph.${(function(){var vc=(OUTPUT_ACCEPTANCE_CONTRACTS[pillar]&&OUTPUT_ACCEPTANCE_CONTRACTS[pillar][out.code]&&OUTPUT_ACCEPTANCE_CONTRACTS[pillar][out.code].visualComponent)||'status-card';return vc&&vc!=='none'?`\n\nVISUAL STRUCTURE FOR THIS OUTPUT: render the substantive body using a ${vc.replace(/-/g,' ')} structure (an actual Markdown table/structured layout, not prose) wherever the required tables/registers above call for one. Do not fabricate percentages, scores or maturity ratings inside it — every cell must trace to a real determination, input or evidence field.`:'';})()}`;
 }
 
 function buildMessageHistory(idx){
@@ -11708,7 +11724,7 @@ function buildExecutiveDashboard(sys, pillar){
       <div style="font-family:var(--font-mono),monospace;font-size:8.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--status-review);margin-bottom:6px;">Material completion actions open — generated but not yet acceptance-ready</div>
       ${docsBlocked.map(o=>{
         const a=o.acceptance||{};
-        const gaps=[].concat(a.missingArtefacts||[], a.legalConstantViolations||[], (a.overlap&&a.overlap.flagged)?['Excessive overlap with another output ('+Math.round(a.overlap.ratio*100)+'%)']:[]);
+        const gaps=[].concat(a.missingArtefacts||[], a.legalConstantViolations||[], (a.overlap&&a.overlap.flagged)?['Excessive overlap with another output ('+Math.round(a.overlap.ratio*100)+'%)']:[], a.decisionLayerMissing?['Missing opening decision layer (result/why/next/legal basis/evidence/blockers/actions)']:[], a.isBareOutline?['Artefact is a bare outline/table of contents, not the substantive artefact']:[]);
         return `<div style="font-size:11.5px;color:var(--muted);margin-bottom:4px;"><b style="color:var(--ink);">${esc(o.code)}</b> — ${esc(gaps.slice(0,3).join('; ')||'acceptance check failed')}${gaps.length>3?' …':''}</div>`;
       }).join('')}
     </div>` : ''}
