@@ -350,6 +350,10 @@ a{color:var(--gold);text-decoration:none;}
 .form-label-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
 .form-label{font-family:'DM Mono','IBM Plex Mono',Consolas,monospace;font-size:9.5px;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);}
 .form-label.required::after{content:' *';color:var(--gold-2);}
+/* Screen readers get the word "required", not just the visual asterisk -
+   sighted users see the same compact mark as before; nothing about the
+   visible design changes. */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
 .form-sub{font-size:11.5px;color:var(--faint);margin-bottom:7px;line-height:1.45;}
 .form-shared{font-family:'DM Mono','IBM Plex Mono',Consolas,monospace;font-size:9px;letter-spacing:0.06em;}
 .field-prefill-wrap{border:0.5px solid rgba(198,166,103,0.2);border-radius:var(--radius-sm);padding:10px 12px;background:rgba(198,166,103,0.03);}
@@ -4240,7 +4244,11 @@ function renderField(f){
     if(!f.note){ f.note=true; f.notePh='Add implementation details, scope, owner, exceptions or other relevant information.'; }
   }
   const val=g(f.id);
-  const noteOpen=st.notes[f.id];
+  // A note the user already wrote stays visible on re-render rather than
+  // hiding behind the toggle again — only a genuinely empty, never-used
+  // note starts collapsed. An explicit user toggle (open or closed) always
+  // wins over this default.
+  const noteOpen = st.notes[f.id]!==undefined ? st.notes[f.id] : !!String(g(f.id+'Note')||'').trim();
   const prefilled=isFieldPrefilled(f);
 
   // Shared badge: green = prefilled from earlier prompt, amber = shared but not yet filled
@@ -4254,7 +4262,7 @@ function renderField(f){
   }
 
   const infoBtn=`<button class="info-btn" onclick="toggleInfo(event,'${f.id}','${esc(f.label)}','${esc(f.legal||'')}','${esc(f.plain||'')}')">i</button>`;
-  const labelHtml=`<div class="form-label-row"><span class="form-label${f.required?' required':''}">${esc(f.label)}</span>${infoBtn}</div>${sharedBadge?`<div style="margin-bottom:4px;">${sharedBadge}</div>`:''}${f.sub?`<div class="form-sub">${esc(f.sub)}</div>`:''}`;
+  const labelHtml=`<div class="form-label-row"><span class="form-label${f.required?' required':''}">${esc(f.label)}${f.required?'<span class="sr-only"> (required)</span>':''}</span>${infoBtn}</div>${sharedBadge?`<div style="margin-bottom:4px;">${sharedBadge}</div>`:''}${f.sub?`<div class="form-sub">${esc(f.sub)}</div>`:''}`;
 
   // Prefilled highlight: subtle gold border on container
   const prefilledStyle=prefilled?'border:0.5px solid rgba(198,166,103,0.2);border-radius:var(--radius-sm);padding:10px 12px;background:rgba(198,166,103,0.03);':'';
@@ -4275,7 +4283,8 @@ function renderField(f){
   }
   const selectedOther=f.type==='ms' && Array.isArray(val) && val.includes('Other');
   const otherHtml=selectedOther?`<textarea class="note-area" style="margin-top:8px;" placeholder="Specify other option(s)…" oninput="sf('${f.id}Other',this.value)">${esc(g(f.id+'Other')||'')}</textarea>`:'';
-  const noteHtml=f.note?`<button class="note-toggle" onclick="toggleNote('${f.id}')">✎ Add note${noteOpen?' ▾':' ▸'}</button>${noteOpen?`<textarea class="note-area" placeholder="${esc(f.notePh||'Add detail…')}" oninput="sf('${f.id}Note',this.value)">${esc(g(f.id+'Note')||'')}</textarea>`:''}`:'' ;
+  const hasNoteContent=!!String(g(f.id+'Note')||'').trim();
+  const noteHtml=f.note?`<button class="note-toggle" onclick="toggleNote('${f.id}')">✎ ${noteOpen?(hasNoteContent?'Note':'Add note'):'Add note'}${noteOpen?' ▾':' ▸'}</button>${noteOpen?`<textarea class="note-area" placeholder="${esc(f.notePh||'Add detail…')}" oninput="sf('${f.id}Note',this.value)">${esc(g(f.id+'Note')||'')}</textarea>`:''}`:'' ;
   return`<div class="form-field"${prefilled?' style="'+prefilledStyle+'"':''}>${labelHtml}${ctrl}${otherHtml}${noteHtml}</div>`;
 }
 
