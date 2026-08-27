@@ -5727,6 +5727,7 @@ function saveExecState(){
         manualRetryCount:  o.manualRetryCount||0,
         interrupted:       !!o.interrupted,
         acceptance:        o.acceptance||null,
+        truncated:         !!o.truncated,
       })),
       lastCheckpointReason: exec.lastCheckpointReason||'',
       lastCheckpointAt: exec.lastCheckpointAt||Date.now(),
@@ -5890,6 +5891,7 @@ function runEngine(){
         interrupted:       !!sv.interrupted,
         lastUsage:         sv.usage||null,
         acceptance:        sv.acceptance||null,
+        truncated:         !!sv.truncated,
       };
     });
     const firstUnfinished = exec.outputs.findIndex(o=>o.state!=='complete');
@@ -6339,7 +6341,10 @@ function computeSubstantiveOverlapRatio(text, priorTexts){
 //   evidenceFields:[...], machineReadableAnnex: string|null,
 //   visualComponent: string, approvalFields:[...],
 //   distinctivenessNote: string, prohibitedSubstitutes:[...],
-//   completionBlockers:[...] (regexes/keys checked by the validator),
+//   completionBlockers:[...] (free-text failure conditions; validateOutputAcceptance
+//     mechanically checks the table/matrix-required and duplication/restatement
+//     shapes and blocks on those, everything else surfaces as blockersUnverified
+//     for human review rather than being silently ignored or falsely passed),
 //   conditionalActivation: {condition, notApplicableReasonRequired:bool}|null,
 // }
 
@@ -7116,7 +7121,13 @@ function getTokenBudget(pillar, code){
   const scaled = pillarDefault + sections*350;
   return Math.max(pillarDefault, Math.min(scaled, OUTPUT_TOKEN_BUDGET_DEFAULT));
 }
-const MAX_CONTINUATIONS = 1; // only one continuation, reserved for true truncation
+// Safety bound against a runaway loop (a misbehaving model that never
+// naturally finishes) - NOT a business decision that a truncated document is
+// an acceptable end state. See the automatic continuation loop in
+// execApiMode(): a max_tokens stop_reason is a transport-level limit of one
+// API call and is resolved automatically, without asking the user to click
+// retry, up to this many additional calls for the same output.
+const MAX_CONTINUATIONS = 6;
 
 function buildCompletionRepairInstruction(out, validation, attempt){
   const warnings=(validation&&validation.warnings)||[];
@@ -7222,6 +7233,7 @@ async function execApiMode(idx, signal){
 
   const tokenBudget=getTokenBudget(exec.pillar,out.code);
   const runCap=MAX_REQUESTS_PER_RUN[exec.pillar]||Math.max(exec.outputs.length,30);
+  const limit=getRunCostLimit(exec.pillar);
   exec.actualCostUsd=exec.actualCostUsd||0;
   exec.responsesReceived=exec.responsesReceived||0;
   exec.requestsDispatched=exec.requestsDispatched||0;
@@ -7229,13 +7241,17 @@ async function execApiMode(idx, signal){
   out.requestsDispatched=out.requestsDispatched||0;
   out.apiCalls=out.apiCalls||0;
 
-  if(out.requestsDispatched>=1){
+  // Resuming an output that was interrupted (app closed/crashed) mid-way
+  // through its own automatic continuation loop below is legitimate and must
+  // not be blocked by the one-dispatch guard - only a genuinely finished
+  // (state==='complete') or freshly-erroring output is protected by it.
+  const resumingUnfinishedContinuation = out.state!=='complete' && out.stopReason==='max_tokens' && !!String(out.content||'').trim();
+  if(out.requestsDispatched>=1 && !resumingUnfinishedContinuation){
     throw new Error(`${out.code}: one automatic API dispatch is permitted per output. Use explicit manual retry if required.`);
   }
   if(exec.requestsDispatched>=runCap){
     throw new Error(`Execution stopped: ${runCap} request limit for ${exec.pillar} reached. Completed outputs were preserved.`);
   }
-  const limit=getRunCostLimit(exec.pillar);
   if((exec.actualCostUsd||0)>=limit){
     throw new Error(`Execution stopped before ${out.code}: $${limit.toFixed(2)} ${exec.pillar} actual-cost limit reached. Completed outputs were preserved.`);
   }
@@ -7245,129 +7261,155 @@ async function execApiMode(idx, signal){
   out.rawError=null;
   renderExecList(); updateExecProgress(); saveExecState();
 
-  // Continuation of a truncated document — narrow, human-authorised case
-  // only: the user explicitly clicked retry (manualRetryCount>0, set by
-  // execResume) on an output whose PRIOR attempt was confirmed truncated
-  // at max_tokens and which still has the partial content from that
-  // attempt. Continues the same document via prefill (the partial content
-  // as an assistant turn) instead of paying to regenerate it from scratch.
-  // Every other retry path (error retry, normal sequential generation) is
-  // completely unaffected — this only fires on this one specific combination.
-  const priorContent = String(out.content||'');
-  const isTruncationContinuation = out.stopReason==='max_tokens' && (out.manualRetryCount||0)>0 && !!priorContent.trim();
-  const messages = isTruncationContinuation
-    ? [
-        {role:'user', content: buildOutputPrompt(idx)+'\n\n'+buildCompletionRepairInstruction(out, out.validation, out.manualRetryCount)},
-        {role:'assistant', content: priorContent},
-      ]
-    : buildMessageHistory(idx);
   const systemPromptParts=buildSystemPrompt(exec.pillar,out);
-  out.requestsDispatched++;
-  exec.requestsDispatched++;
-  let data;
   // A dispatched-but-failed request (network blip, 429 rate limit, transient
   // 5xx/529 "overloaded") never produced billable content, so retrying it is
-  // not a second paid generation of the same output — only a genuinely
-  // completed/erroring generation is subject to the one-dispatch guard above.
-  // Without this, any transient Anthropic hiccup permanently stalled the run
-  // at whichever output happened to be in flight, requiring a manual
-  // "Continue from checkpoint" click for something that would have quietly
-  // succeeded a few seconds later.
+  // not a second paid generation of the same output.
   const MAX_TRANSIENT_RETRIES=3;
-  let lastErr=null;
-  for(let attempt=0; attempt<=MAX_TRANSIENT_RETRIES; attempt++){
-    try{
-      data=await callAnthropicForOutput(model,tokenBudget,systemPromptParts,messages,configuredKey,signal);
-      lastErr=null;
-      break;
-    }catch(err){
-      lastErr=err;
-      const canRetry=err && err.retryable && attempt<MAX_TRANSIENT_RETRIES;
-      if(!canRetry) break;
-      const waitMs=Math.min(err.retryAfterMs||(1000*Math.pow(2,attempt)), 20000);
-      out.lastError=`${out.code}: transient error (${err.message}). Auto-retrying (${attempt+1}/${MAX_TRANSIENT_RETRIES}) in ${(waitMs/1000).toFixed(1)}s…`;
-      renderExecList(); updateExecProgress();
-      await sleep(waitMs);
+
+  // max_tokens is a transport-level limit of ONE API call, not a content
+  // defect - the loop below keeps calling the API for THIS SAME output,
+  // prefilling the accumulated content each time (assistant-role turn),
+  // until the model finishes naturally or the MAX_CONTINUATIONS safety net
+  // is reached. This never requires the user to notice truncation and click
+  // retry, and the run sequence never advances to the next output while
+  // this one is still incomplete.
+  let accumulatedContent = resumingUnfinishedContinuation ? String(out.content||'') : '';
+  let continuationAttempt = resumingUnfinishedContinuation ? (out.continuationCount||0) : 0;
+  let stopReason = null;
+  let usage = null;
+  let lastReqCost = 0;
+
+  while(true){
+    const isContinuation = continuationAttempt>0;
+    const messages = isContinuation
+      ? [
+          {role:'user', content: buildOutputPrompt(idx)+'\n\n'+buildCompletionRepairInstruction(out, out.validation, continuationAttempt)},
+          {role:'assistant', content: accumulatedContent},
+        ]
+      : buildMessageHistory(idx);
+
+    out.requestsDispatched++;
+    exec.requestsDispatched++;
+    let data;
+    let lastErr=null;
+    for(let attempt=0; attempt<=MAX_TRANSIENT_RETRIES; attempt++){
+      try{
+        data=await callAnthropicForOutput(model,tokenBudget,systemPromptParts,messages,configuredKey,signal);
+        lastErr=null;
+        break;
+      }catch(err){
+        lastErr=err;
+        const canRetry=err && err.retryable && attempt<MAX_TRANSIENT_RETRIES;
+        if(!canRetry) break;
+        const waitMs=Math.min(err.retryAfterMs||(1000*Math.pow(2,attempt)), 20000);
+        out.lastError=`${out.code}: transient error (${err.message}). Auto-retrying (${attempt+1}/${MAX_TRANSIENT_RETRIES}) in ${(waitMs/1000).toFixed(1)}s…`;
+        renderExecList(); updateExecProgress();
+        await sleep(waitMs);
+      }
     }
-  }
-  if(lastErr){
-    out.state='error';
-    out.lastError=String(lastErr&&lastErr.message?lastErr.message:lastErr);
-    out.rawError=lastErr&&lastErr.raw?lastErr.raw:null;
+    if(lastErr){
+      out.state='error';
+      out.lastError=String(lastErr&&lastErr.message?lastErr.message:lastErr);
+      out.rawError=lastErr&&lastErr.raw?lastErr.raw:null;
+      saveExecState();
+      throw lastErr;
+    }
+
+    const text=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
+    if(!text && !isContinuation){
+      out.state='error';
+      out.lastError='Anthropic returned an empty text response for '+out.code+'.';
+      saveExecState();
+      throw new Error(out.lastError);
+    }
+
+    usage=data.usage||null;
+    stopReason=data.stop_reason||null;
+    const reqCost=calculateRequestCost(model,usage);
+    lastReqCost=reqCost;
+    exec.actualCostUsd += reqCost;
+    out.costUsd=(out.costUsd||0)+reqCost;
+    exec.responsesReceived++;
+    out.responsesReceived++;
+    out.apiCalls++;
+
+    accumulatedContent = isContinuation ? (accumulatedContent+'\n\n'+text) : text;
+    out.content=accumulatedContent;
+    out.stopReason=stopReason;
+    out.usage=usage;
+    out.lastUsage=usage;
+    out.model=model;
+    out.generatedAt=new Date().toISOString();
+    out.telemetry=(out.telemetry||[]);
+    out.telemetry.push(Object.assign({},data._eaceTelemetry||{model,stopReason,usage},{actualCostUsd:reqCost}));
+    if(isContinuation) out.continuationCount=continuationAttempt;
+
+    // Advisory validation, recomputed on the full accumulated document each
+    // pass so a subsequent continuation's repair instruction cites real gaps.
+    out.validation=validateGeneratedOutput(exec.pillar,out.code,accumulatedContent,{stopReason});
+    out.wordCount=out.validation.wordCount;
+    out.estimatedPages=out.validation.estimatedPages;
     saveExecState();
-    throw lastErr;
+    renderExecList(); updateExecProgress();
+
+    if(stopReason!=='max_tokens') break; // finished naturally
+    if(continuationAttempt>=MAX_CONTINUATIONS) break; // safety net exhausted
+    if(!text) break; // a continuation call returning nothing new is a stuck loop, not progress
+    // A continuation is a real paid request - re-check the same run-level
+    // caps the entry guards enforced above before firing another one.
+    if(exec.requestsDispatched>=runCap || (exec.actualCostUsd||0)>=limit) break;
+
+    continuationAttempt++;
+    await sleep(300);
   }
 
-  const text=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
-  if(!text){
+  if(!accumulatedContent.trim()){
     out.state='error';
     out.lastError='Anthropic returned an empty text response for '+out.code+'.';
     saveExecState();
     throw new Error(out.lastError);
   }
-
-  const usage=data.usage||null;
-  const stopReason=data.stop_reason||null;
-  const reqCost=calculateRequestCost(model,usage);
-  exec.actualCostUsd += reqCost;
-  out.costUsd=(out.costUsd||0)+reqCost;
-  exec.responsesReceived++;
-  out.responsesReceived++;
-  out.apiCalls++;
-  // On a truncation-continuation, the full document is the prior content
-  // plus the new chunk — validation/acceptance below must see the whole
-  // artefact, not just the newly-generated tail.
-  const fullContent = isTruncationContinuation ? (priorContent+'\n\n'+text) : text;
-  out.content=fullContent;
-  out.stopReason=stopReason;
-  out.usage=usage;
-  out.lastUsage=usage;
-  out.model=model;
-  out.generatedAt=new Date().toISOString();
-  out.telemetry=(out.telemetry||[]);
-  out.telemetry.push(Object.assign({},data._eaceTelemetry||{model,stopReason,usage},{actualCostUsd:reqCost}));
-  if(isTruncationContinuation) out.continuationCount=(out.continuationCount||0)+1;
-
-  // Validation is advisory only. It never triggers another paid request.
-  const validation=validateGeneratedOutput(exec.pillar,out.code,fullContent,{stopReason});
-  out.validation=validation;
-  out.wordCount=validation.wordCount;
-  out.estimatedPages=validation.estimatedPages;
-  if(!isTruncationContinuation) out.continuationCount=0;
+  if(continuationAttempt===0) out.continuationCount=0;
 
   // Output-specific acceptance contract check — deliberately kept separate
   // from out.state (generation/execution completion, below) rather than
-  // folded into it. out.state answers "did the API call finish and return
-  // text"; out.acceptance answers "does the artefact contain what its
-  // contract requires". Collapsing these into one flag was the exact
-  // "COMPLETE just because text was generated" problem this layer exists
-  // to fix — see buildExecutiveDashboard / the KPI strip for how the two
-  // are surfaced without contradicting each other.
-  out.acceptance = validateOutputAcceptance(exec.pillar, out.code, fullContent, {
+  // folded into it. out.state answers "did the API call(s) finish and
+  // return the full document"; out.acceptance answers "does the artefact
+  // contain what its contract requires". Collapsing these into one flag was
+  // the exact "COMPLETE just because text was generated" problem this layer
+  // exists to fix.
+  out.acceptance = validateOutputAcceptance(exec.pillar, out.code, accumulatedContent, {
     inputSnapshot: getExecutionInputData(),
     priorTexts: exec.outputs.filter(o=>o.code!==out.code && o.content).map(o=>o.content),
   });
-  // A response confirmed truncated at max_tokens is never a complete
-  // artefact regardless of what the structural checks above found - the
-  // document may be missing its final section entirely. This does NOT
-  // retrigger generation (out.state below is unchanged, so the run
-  // sequence still advances and no second paid request fires); it only
-  // stops the artefact from being reported as regulator-ready.
-  if(stopReason==='max_tokens' && out.acceptance.status!=='BLOCKED'){
+
+  // Still truncated after exhausting the automatic continuation safety net
+  // (MAX_CONTINUATIONS) is a real, honest gap in the document - but it is a
+  // length/orchestration limit, not a content or legal defect, so it is
+  // tracked as its own flag rather than silently reusing acceptance.status
+  // for a meaning it doesn't have anywhere else in this system. It still
+  // keeps the artefact out of "regulatory ready" via the BLOCKED bucket
+  // (the only bucket the dashboard/export treat as not-ready), clearly
+  // worded so it is never mistaken for a legal/content finding.
+  out.truncated = stopReason==='max_tokens';
+  if(out.truncated){
+    // Appended (and status forced to BLOCKED if it wasn't already) regardless
+    // of whether content-level checks separately blocked this artefact — a
+    // reviewer must see the truncation note even when the document also has
+    // unrelated content gaps, not have it silently dropped because some
+    // other check already set status to BLOCKED first.
     out.acceptance = Object.assign({}, out.acceptance, {
       status:'BLOCKED',
-      missingArtefacts:(out.acceptance.missingArtefacts||[]).concat(['Response truncated at max_tokens — the artefact may be missing content after the cut-off point; continuation/regeneration required before this is regulator-ready.']),
+      missingArtefacts:(out.acceptance.missingArtefacts||[]).concat([`Still truncated at max_tokens after ${continuationAttempt} automatic continuation attempt(s) — a length/orchestration limit, not a content or legal defect. Regenerate or manually continue this output.`]),
     });
   }
 
-  // Proven legacy behaviour: any successful non-empty response is complete.
-  // stop_reason is retained in telemetry for review, but it never blocks the
-  // sequence and never triggers a paid continuation or regeneration.
   out.state='complete';
-  out.lastError='';
-  logAudit('run',isTruncationContinuation
-    ? `Output ${out.code} continued after max_tokens truncation (attempt ${out.continuationCount}, ${model}, ${validation.wordCount} total words, stop_reason=${stopReason||'n/a'}, +$${reqCost.toFixed(3)}).`
-    : `Output ${out.code} COMPLETE via one API call (${model}, ${validation.wordCount} words, stop_reason=${stopReason||'n/a'}, $${reqCost.toFixed(3)}).`,
+  if(!out.truncated) out.lastError='';
+  logAudit('run', continuationAttempt>0
+    ? `Output ${out.code} completed after ${continuationAttempt} automatic continuation(s) (${model}, ${out.wordCount} total words, stop_reason=${stopReason||'n/a'}${out.truncated?', STILL TRUNCATED':''}, +$${lastReqCost.toFixed(3)}).`
+    : `Output ${out.code} COMPLETE via one API call (${model}, ${out.wordCount} words, stop_reason=${stopReason||'n/a'}, $${lastReqCost.toFixed(3)}).`,
     exec.pillar,st.data.sysName||'—');
   updateExecCostDisplay();
   renderExecList(); updateExecProgress(); checkpointExecution('output-committed-'+out.code);
@@ -12260,6 +12302,7 @@ function persistCompletedExecOutput(out){
       wordCount:out.wordCount||0, estimatedPages:out.estimatedPages||0, model:out.model||'',
       stopReason:out.stopReason||null, continuationCount:out.continuationCount||0,
       validation:out.validation||null, acceptance:out.acceptance||null, telemetry:out.telemetry||[],
+      truncated:!!out.truncated,
       ts:out.generatedAt||new Date().toISOString(),
       evidenceId:'EV-'+exec.pillar+'-'+out.code+'-'+Date.now()
     };
