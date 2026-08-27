@@ -5978,6 +5978,7 @@ async function execRun(){
       return;
     }
     exec.currentIdx=idx;
+    exec._running=true; // set for the duration of one in-flight request; see updateCheckpointButton/execPrepareSafeNavigation
     try{
       if(st.claudeMode) await execClaudeMode(idx);
       else if(st.apiKey) await execApiMode(idx);
@@ -5996,6 +5997,8 @@ async function execRun(){
       if(txt) txt.textContent=`${out.code} stopped. Completed outputs are preserved. Retry only this output, then continue sequentially.`;
       renderExecList(); updateExecProgress(); updateCheckpointButton(); saveExecState();
       return;
+    }finally{
+      exec._running=false;
     }
     // Legacy-stable rule: a successful, non-empty Anthropic response is an
     // atomic completed output. Do not stop the run because of page targets,
@@ -12051,7 +12054,6 @@ async function execComplete(){
     }
   }
 
-  exec.running=false;
   st.view='output';
   const overlay = document.getElementById('exec-overlay');
   if(overlay) overlay.style.display='none';
