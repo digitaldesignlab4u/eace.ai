@@ -12499,7 +12499,7 @@ const EA_PROVIDERS = PROVIDER_REGISTRY
   });
 
 function openEngineActivation(){
-  ea.step=2; ea.provider='anthropic'; ea.creds=''; // Skip provider selection — single provider
+  ea.step=2; ea.provider='anthropic'; ea.creds=''; ea.credsError=''; // Skip provider selection — single provider
   let overlay=$id('engine-activation-overlay');
   if(!overlay){
     overlay=document.createElement('div');
@@ -12557,9 +12557,10 @@ function renderEAStep(){
       +'<div class="ea-panel-sub">Enter your '+esc(prov2.name)+' credentials. Held only for this browser session, never written to disk.</div>'
       +'<div class="ea-field"><label class="ea-field-label" for="ea-creds-input">'+esc(credLabel)+'</label>'
       +'<div class="byok-api-row">'
-      +'<input class="ea-field-input field-input" type="password" id="ea-creds-input" placeholder="'+esc(credPh)+'" autocomplete="off" value="'+esc(ea.creds)+'" oninput="ea.creds=this.value"/>'
-      +'<button type="button" class="ea-btn-primary" style="flex-shrink:0;white-space:nowrap;" onclick="eaNext()">Validate connection &rarr;</button>'
+      +'<input class="ea-field-input field-input" type="password" id="ea-creds-input" placeholder="'+esc(credPh)+'" autocomplete="off" value="'+esc(ea.creds)+'" oninput="ea.creds=this.value;eaClearCredsError();"/>'
+      +'<button type="button" class="ea-btn-primary" style="flex-shrink:0;white-space:nowrap;" onclick="eaNext()" '+(String(ea.creds||'').trim()?'':'disabled style="opacity:.4;cursor:default;"')+'>Validate connection &rarr;</button>'
       +'</div>'
+      +(ea.credsError?'<div class="ea-creds-error" id="ea-creds-error" style="color:var(--red-bright);font-size:11px;margin-top:8px;">'+esc(ea.credsError)+'</div>':'<div id="ea-creds-error"></div>')
       +'</div>'
       +'<div style="font-family:var(--font-mono),monospace;font-size:9px;color:var(--faint);margin-top:8px;">Session-only &mdash; never written to disk or exported</div>'
       +'</div>';
@@ -12608,15 +12609,19 @@ function renderEAStep(){
 }
 
 function eaSelectProvider(id){ ea.provider=id; renderEAStep(); }
-function eaNext(){ if(ea.step===1&&!ea.provider)return; ea.step++; renderEAStep(); }
+function eaClearCredsError(){ if(ea.credsError){ ea.credsError=''; const el=$id('ea-creds-error'); if(el) el.textContent=''; } }
+function eaNext(){
+  if(ea.step===1&&!ea.provider)return;
+  if(ea.step===2&&!String(ea.creds||'').trim())return; // "Validate connection" is also disabled in this state; this guards a stale/cached button.
+  ea.step++; renderEAStep();
+}
 function eaPrev(){ if(ea.step>1){ea.step--;renderEAStep();} }
 
-function runEAValidation(){
+async function runEAValidation(){
   const steps=[
     {id:'ea-val-1',row:null,           delay:0},
     {id:'ea-val-2',row:'ea-val-row-2', delay:800},
     {id:'ea-val-3',row:'ea-val-row-3', delay:1600},
-    {id:'ea-val-4',row:'ea-val-row-4', delay:2400},
   ];
   steps.forEach(function(step,idx){
     setTimeout(function(){
@@ -12625,15 +12630,43 @@ function runEAValidation(){
       var cur=$id(step.id);if(cur){cur.className='ea-val-icon checking';cur.textContent='\u21bb';}
     },step.delay);
   });
-  setTimeout(function(){
-    var last=$id('ea-val-4');if(last){last.className='ea-val-icon done';last.textContent='\u2713';}
-    if(ea.provider==='anthropic'&&ea.creds){setConfiguredApiKey(ea.creds);}
-    else if(ea.creds){setConfiguredApiKey(ea.creds);}
-    if(ea.provider){try{sessionStorage.setItem('eace_provider',ea.provider);}catch(e){}}
-    st.engineActive=true;
-    st.engineProvider=ea.provider;
-    setTimeout(function(){ea.step=4;renderEAStep();},600);
-  },3200);
+
+  // Real check, not a timer: "Checking credentials..." previously always
+  // succeeded regardless of whether the key actually worked, so a typo'd
+  // or empty key produced a false "Compliance Engine Operational" screen
+  // - the failure only surfaced later, confusingly, when a real
+  // generation request failed. This sends one minimal, near-zero-cost
+  // request through the same call path real generation uses.
+  const key=String(ea.creds||'').trim();
+  const minDisplayMs=new Promise(function(r){ setTimeout(r,1800); });
+  let ok=false, errMsg='';
+  try{
+    await Promise.all([
+      callAnthropicForOutput('claude-haiku-4-5', 1, '', [{role:'user',content:'ping'}], key, undefined),
+      minDisplayMs,
+    ]);
+    ok=true;
+  }catch(e){
+    await minDisplayMs;
+    ok=false;
+    errMsg=String(e&&e.message?e.message:e);
+  }
+
+  if(!ok){
+    ea.step=2;
+    ea.credsError='Connection failed: '+errMsg+' Check the key and try again.';
+    renderEAStep();
+    return;
+  }
+
+  const last4=$id('ea-val-row-4');if(last4)last4.style.opacity='1';
+  var last=$id('ea-val-4');if(last){last.className='ea-val-icon done';last.textContent='\u2713';}
+  const prev3=$id('ea-val-3');if(prev3){prev3.className='ea-val-icon done';prev3.textContent='\u2713';}
+  setConfiguredApiKey(key);
+  if(ea.provider){try{sessionStorage.setItem('eace_provider',ea.provider);}catch(e){}}
+  st.engineActive=true;
+  st.engineProvider=ea.provider;
+  setTimeout(function(){ea.step=4;renderEAStep();},400);
 }
 
 function eaComplete(){
