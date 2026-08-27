@@ -6249,7 +6249,7 @@ function scanUnsupportedStatusClaims(text, inputSnapshot){
   const sentences = t.split(/(?<=[.!?])\s+(?=[A-Z(])/);
   const snapshotProbe = JSON.stringify(inputSnapshot||{}).toLowerCase();
   UNSUPPORTED_STATUS_VERBS.forEach(verb=>{
-    const re = new RegExp('\\b(is|are|has been|have been|was|were)\\s+'+verb+'\\b','i');
+    const re = new RegExp('\\b(is|are|has been|have been|was|were)\\s+(?:\\w+\\s+){0,2}'+verb+'\\b','i');
     sentences.forEach(s=>{
       if(!re.test(s)) return;
       const hasProvenanceTag = /\b(USER_SUPPLIED|ATTACHMENT_SUPPORTED|SYSTEM_DERIVED|OFFICIAL_SOURCE|ASSUMPTION|NOT_ESTABLISHED)\b/.test(s);
