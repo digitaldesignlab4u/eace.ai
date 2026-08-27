@@ -5803,6 +5803,8 @@ async function exportPartialExecutionState(){
         acceptanceStatus: (o.acceptance&&o.acceptance.status)||'NOT_EVALUATED',
         contractId: (o.acceptance&&o.acceptance.contractId)||null,
         missingArtefacts: (o.acceptance&&o.acceptance.missingArtefacts)||[],
+        blockersTriggered: (o.acceptance&&o.acceptance.blockersTriggered)||[],
+        blockersUnverified: (o.acceptance&&o.acceptance.blockersUnverified)||[],
         generatedAt: o.generatedAt||null,
       });
     }
@@ -7000,6 +7002,33 @@ function validateOutputAcceptance(pillar, code, text, ctx){
   const overlapInfo = computeSubstantiveOverlapRatio(trimmed, ctx.priorTexts||[]);
   const overlapFlagged = overlapInfo.ratio > 0.35;
 
+  // completionBlockers were previously carried as contract metadata used
+  // ONLY to build the model-facing prompt (buildOutputAcceptanceInstruction)
+  // and never actually checked against the generated text. Most are
+  // bespoke per-output legal/domain conditions ("FRIA triggered without
+  // naming the Art. 27(1) deployer category") that cannot be safely
+  // machine-verified without fabricating false confidence — so those are
+  // surfaced honestly as advisory, for human review, rather than silently
+  // dropped or falsely claimed as passed. Two shapes recur often enough
+  // across contracts to check for real, mechanically, without guessing:
+  // (a) a required table/matrix that is structurally absent, and (b) a
+  // "duplicates/restates/identical to/re-uses ... unchanged" blocker,
+  // which the overlap check above already computes for real.
+  const HAS_MD_TABLE = /\|[^|\n]+\|[^|\n]+\|[^\n]*\n[ \t]*\|?[ \t]*:?-{2,}:?[ \t|:-]*\|/;
+  const DUPLICATION_BLOCKER_CUE = /\b(duplicat|restate|identical to|re-?states? .*verbatim|re-?uses? .* unchanged|unchanged)\b/i;
+  const blockersTriggered = [];
+  const blockersUnverified = [];
+  (contract.completionBlockers||[]).forEach(b=>{
+    const bLower = String(b||'').toLowerCase();
+    if(/\btable\b|\bmatrix\b/.test(bLower)){
+      if(!HAS_MD_TABLE.test(trimmed)) blockersTriggered.push(b);
+    } else if(DUPLICATION_BLOCKER_CUE.test(bLower)){
+      if(overlapFlagged) blockersTriggered.push(b);
+    } else {
+      blockersUnverified.push(b);
+    }
+  });
+
   const bodyLines = trimmed.split(/\n/).filter(l=>l.trim());
   const isBareOutline = /^#+\s*(table of contents|outline|overview)\s*$/im.test(trimmed) && bodyLines.length < 25;
 
@@ -7021,13 +7050,14 @@ function validateOutputAcceptance(pillar, code, text, ctx){
   // user-supplied input) is exactly the anti-hallucination failure this
   // contract system exists to catch - it blocks acceptance rather than
   // being advisory-only, matching every other structural check here.
-  const structurallyBlocked = missingArtefacts.length>0 || legalConstantViolations.length>0 || overlapFlagged || isBareOutline || decisionLayerMissing || unsupportedStatusClaims.length>0;
+  const structurallyBlocked = missingArtefacts.length>0 || legalConstantViolations.length>0 || overlapFlagged || isBareOutline || decisionLayerMissing || unsupportedStatusClaims.length>0 || blockersTriggered.length>0;
   const status = structurallyBlocked ? 'BLOCKED' : approvalFieldsPending.length>0 ? 'ACCEPTED_PENDING_APPROVAL' : 'ACCEPTED';
 
   return {
     status,
     contractId: contract.id,
     missingArtefacts, legalConstantViolations, unsupportedStatusClaims, approvalFieldsPending, decisionLayerMissing,
+    blockersTriggered, blockersUnverified,
     overlap:{ratio:overlapInfo.ratio, copiedLines:overlapInfo.copiedLines, totalLines:overlapInfo.totalLines, flagged:overlapFlagged},
     isBareOutline, notApplicable:false,
   };
@@ -7070,10 +7100,21 @@ const OUTPUT_TOKEN_BUDGETS = {
 // subdocument output are not billed the same ceiling by default. Capped to
 // a sane floor/ceiling regardless of the formula's result.
 function getTokenBudget(pillar, code){
-  // Stable execution profile inherited from the proven legacy engine.
-  // One fixed ceiling prevents output-specific budget inflation from turning
-  // a single artefact into a 16K-token request and triggering continuation.
-  return 8192;
+  // A flat 8192 for every output regardless of contract complexity wastes
+  // budget on a 1-2 section output and, more importantly, gives a large
+  // multi-table/multi-register output no more headroom than a trivial one.
+  // Scale the per-pillar baseline up toward the verified-safe ceiling
+  // (OUTPUT_TOKEN_BUDGET_DEFAULT) using the real section count the contract
+  // requires (getOutputSpec's mandatorySections, sourced from
+  // OUTPUT_ACCEPTANCE_CONTRACTS) - never exceeding that ceiling, since a
+  // higher max_tokens is not verified safe for every model/account this app
+  // can be pointed at and a rejected request is worse than a truncation the
+  // continuation/repair path (MAX_CONTINUATIONS below) already handles.
+  const pillarDefault = (OUTPUT_TOKEN_BUDGETS[pillar]&&OUTPUT_TOKEN_BUDGETS[pillar].default) || OUTPUT_TOKEN_BUDGET_DEFAULT;
+  const spec = (typeof getOutputSpec==='function') ? getOutputSpec(pillar, code) : null;
+  const sections = (spec && typeof spec.mandatorySections==='number') ? spec.mandatorySections : 0;
+  const scaled = pillarDefault + sections*350;
+  return Math.max(pillarDefault, Math.min(scaled, OUTPUT_TOKEN_BUDGET_DEFAULT));
 }
 const MAX_CONTINUATIONS = 1; // only one continuation, reserved for true truncation
 
@@ -7179,7 +7220,7 @@ async function execApiMode(idx, signal){
   const configuredKey=getConfiguredApiKey();
   if(!configuredKey) throw new Error('No API key configured.');
 
-  const tokenBudget=8192;
+  const tokenBudget=getTokenBudget(exec.pillar,out.code);
   const runCap=MAX_REQUESTS_PER_RUN[exec.pillar]||Math.max(exec.outputs.length,30);
   exec.actualCostUsd=exec.actualCostUsd||0;
   exec.responsesReceived=exec.responsesReceived||0;
@@ -11915,6 +11956,13 @@ function buildExecutiveDashboard(sys, pillar){
   const docsBlocked     = docsWithContract.filter(o=>o.acceptance.status==='BLOCKED');
   const docsPendingApproval = docsWithContract.filter(o=>o.acceptance.status==='ACCEPTED_PENDING_APPROVAL');
   const docsAccepted    = docsWithContract.filter(o=>o.acceptance.status==='ACCEPTED');
+  // Contract conditions that describe bespoke legal/domain judgement (e.g.
+  // "FRIA triggered without naming the Art. 27(1) deployer category") are
+  // not safely machine-verifiable — rather than silently ignore them or
+  // falsely claim they passed, an ACCEPTED output that still carries them
+  // is surfaced here so a human reviewer sees exactly what was never
+  // actually checked by software.
+  const docsNeedingManualReview = docsWithContract.filter(o=>o.acceptance.status!=='BLOCKED' && (o.acceptance.blockersUnverified||[]).length>0);
   // Human approval status (Section 14, 4th axis): pending signatures are a
   // real open action, but a DIFFERENT kind of open action than a
   // structurally broken artefact — kept in its own bucket rather than
@@ -11964,7 +12012,7 @@ function buildExecutiveDashboard(sys, pillar){
       <div style="font-family:var(--font-mono),monospace;font-size:8.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--status-review);margin-bottom:6px;">Material completion actions open — generated but not yet acceptance-ready</div>
       ${docsBlocked.map(o=>{
         const a=o.acceptance||{};
-        const gaps=[].concat(a.missingArtefacts||[], a.legalConstantViolations||[], (a.overlap&&a.overlap.flagged)?['Excessive overlap with another output ('+Math.round(a.overlap.ratio*100)+'%)']:[], a.decisionLayerMissing?['Missing opening decision layer (result/why/next/legal basis/evidence/blockers/actions)']:[], a.isBareOutline?['Artefact is a bare outline/table of contents, not the substantive artefact']:[]);
+        const gaps=[].concat(a.missingArtefacts||[], a.legalConstantViolations||[], a.blockersTriggered||[], (a.overlap&&a.overlap.flagged)?['Excessive overlap with another output ('+Math.round(a.overlap.ratio*100)+'%)']:[], a.decisionLayerMissing?['Missing opening decision layer (result/why/next/legal basis/evidence/blockers/actions)']:[], a.isBareOutline?['Artefact is a bare outline/table of contents, not the substantive artefact']:[]);
         return `<div style="font-size:11.5px;color:var(--muted);margin-bottom:4px;"><b style="color:var(--ink);">${esc(o.code)}</b> — ${esc(gaps.slice(0,3).join('; ')||'acceptance check failed')}${gaps.length>3?' …':''}</div>`;
       }).join('')}
     </div>` : ''}
@@ -11972,6 +12020,11 @@ function buildExecutiveDashboard(sys, pillar){
     <div style="background:rgba(211,168,74,0.08);border:0.5px solid var(--status-progress);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:18px;">
       <div style="font-family:var(--font-mono),monospace;font-size:8.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--status-progress);margin-bottom:6px;">Human approval status — drafting complete, signature/approval field(s) not yet evidenced</div>
       ${docsPendingApproval.map(o=>`<div style="font-size:11.5px;color:var(--muted);margin-bottom:4px;"><b style="color:var(--ink);">${esc(o.code)}</b> — awaiting: ${esc((o.acceptance.approvalFieldsPending||[]).join('; '))}</div>`).join('')}
+    </div>` : ''}
+    ${docsNeedingManualReview.length ? `
+    <div style="background:rgba(120,120,140,0.08);border:0.5px solid var(--border-2);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:18px;">
+      <div style="font-family:var(--font-mono),monospace;font-size:8.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;">Requires manual verification — not machine-checkable</div>
+      ${docsNeedingManualReview.map(o=>`<div style="font-size:11.5px;color:var(--muted);margin-bottom:4px;"><b style="color:var(--ink);">${esc(o.code)}</b> — ${esc((o.acceptance.blockersUnverified||[]).slice(0,2).join('; '))}${(o.acceptance.blockersUnverified||[]).length>2?' …':''}</div>`).join('')}
     </div>` : ''}
     ${groupOrder.map(group=>`
     <div style="margin-bottom:14px;">
@@ -12166,7 +12219,7 @@ function buildFinalRegulatoryReview(sys, pillar, outputs){
     const refs=[...String(o.content||'').matchAll(/\b(?:O|P)[A-Z0-9-]{1,8}\b/g)].map(m=>m[0]);
     refs.forEach(ref=>{ if(!outputs.some(x=>x.code===ref)) crossRefs.push({from:o.code,ref}); });
   });
-  const blockedOutputs = outputs.filter(o=>o.acceptance && o.acceptance.status==='BLOCKED').map(o=>({code:o.code, gaps:(o.acceptance.missingArtefacts||[]).concat(o.acceptance.legalConstantViolations||[]).slice(0,3)}));
+  const blockedOutputs = outputs.filter(o=>o.acceptance && o.acceptance.status==='BLOCKED').map(o=>({code:o.code, gaps:(o.acceptance.missingArtefacts||[]).concat(o.acceptance.legalConstantViolations||[]).concat(o.acceptance.blockersTriggered||[]).slice(0,3)}));
   const pendingApprovalOutputs = outputs.filter(o=>o.acceptance && o.acceptance.status==='ACCEPTED_PENDING_APPROVAL').map(o=>o.code);
   const status = blockedOutputs.length ? 'MATERIAL COMPLETION ACTIONS OPEN'
     : pendingApprovalOutputs.length ? 'GENERATED — PENDING HUMAN APPROVAL'
