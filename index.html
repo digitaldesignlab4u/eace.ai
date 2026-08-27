@@ -8950,6 +8950,26 @@ async function buildSingleOutputDocxBlob(sys, o){
   return Packer.toBlob(doc);
 }
 
+// A CSV-A/CSV-B canonical output's contract requires an actual delimited/
+// structured machine-readable file (Section 1/13: "export real CSV/JSON
+// artefacts as separate machine-readable files inside ZIP packages" - a
+// prose description of what the file would contain is an explicitly
+// prohibited substitute). Extracts the fenced code block the model was
+// instructed to produce; never silently drops the content if the fence is
+// missing - it falls back to the raw text under the same real filename so
+// nothing generated is lost, it just may need a follow-up regeneration.
+function extractMachineReadableArtefact(pillar, output){
+  const contract = OUTPUT_ACCEPTANCE_CONTRACTS[pillar] && OUTPUT_ACCEPTANCE_CONTRACTS[pillar][output.code];
+  const annex = contract && contract.machineReadableAnnex;
+  const isJson = !!(annex && /\.json\b/i.test(annex));
+  const ext = isJson ? 'json' : 'csv';
+  const fenceRe = /```(?:csv|json)?\s*\n([\s\S]*?)```/i;
+  const m = fenceRe.exec(String(output.content||''));
+  const body = m ? m[1].trim() : String(output.content||'').trim();
+  const baseName = (annex||'').split(/\s|:/)[0].replace(/\.(csv|json)$/i,'') || (output.code||'export').toLowerCase();
+  return { filename: baseName+'.'+ext, content: body, fenceFound: !!m };
+}
+
 async function exportRegulatoryZIP(sysId){
   const sys = resolveExportSystem(sysId);
   if(!sys){ showToast('No active system.','var(--amber)'); return; }
@@ -8959,10 +8979,21 @@ async function exportRegulatoryZIP(sysId){
   const zip = new JSZip();
   const slug = (sys.name||'system').replace(/[^a-z0-9]+/gi,'-').toLowerCase();
 
-  // /docs — one styled EACE Document Standard .docx file per generated output
-  // (previously plain .txt — this was the last unstyled export surface)
+  // /docs — one styled EACE Document Standard .docx file per generated
+  // narrative output. CSV-A/CSV-B canonical outputs are machine-readable
+  // exports, not prose artefacts, so they are routed to /data as real
+  // .csv/.json files instead of being wrapped into a .docx (see
+  // extractMachineReadableArtefact above).
   const docs = zip.folder('docs');
+  const dataFolder = zip.folder('data');
+  const machineReadableManifest = [];
   for(const o of completeOutputs){
+    if(/^CSV/i.test(o.code||'')){
+      const mr = extractMachineReadableArtefact(o.pillar||sys.pillar, o);
+      dataFolder.file(mr.filename, mr.content);
+      machineReadableManifest.push({code:o.code, filename:'data/'+mr.filename, fenceFound:mr.fenceFound});
+      continue;
+    }
     const blob = await buildSingleOutputDocxBlob(sys, o);
     docs.file((o.code||'doc')+'-'+(o.title||'').replace(/[^a-z0-9]+/gi,'-').toLowerCase()+'.docx', blob);
   }
@@ -8989,8 +9020,9 @@ async function exportRegulatoryZIP(sysId){
   // manifest.json — package-level metadata
   zip.file('manifest.json', JSON.stringify({
     package:'EACE Regulatory Package', system:sys.name, generatedAt:new Date().toISOString(),
-    engine:sys.pillar, documentsCount:completeOutputs.length, evidenceCount:(sys.evidence||[]).length,
-    contents:['docs/','evidence/evidence-register.csv','json/system.json','csv/classification.csv','csv/outputs.csv','hash/manifest.sha256'],
+    engine:sys.pillar, documentsCount:completeOutputs.length-machineReadableManifest.length, evidenceCount:(sys.evidence||[]).length,
+    machineReadableArtefacts: machineReadableManifest,
+    contents:['docs/','data/','evidence/evidence-register.csv','json/system.json','csv/classification.csv','csv/outputs.csv','hash/manifest.sha256'],
   }, null, 2));
 
   // README
@@ -9000,6 +9032,7 @@ async function exportRegulatoryZIP(sysId){
     'Generated: '+new Date().toISOString()+'\n\n'+
     'Contents:\n'+
     '  /docs      — generated regulatory documents (EACE Document Standard .docx)\n'+
+    '  /data      — canonical CSV-A/CSV-B machine-readable exports (.csv/.json), extracted from the generated fenced code block\n'+
     '  /evidence  — evidence register (CSV)\n'+
     '  /json      — full structured export\n'+
     '  /csv       — classification and outputs (CSV)\n'+
