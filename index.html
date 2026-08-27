@@ -7158,7 +7158,22 @@ async function execApiMode(idx, signal){
   out.rawError=null;
   renderExecList(); updateExecProgress(); saveExecState();
 
-  const messages=buildMessageHistory(idx);
+  // Continuation of a truncated document — narrow, human-authorised case
+  // only: the user explicitly clicked retry (manualRetryCount>0, set by
+  // execResume) on an output whose PRIOR attempt was confirmed truncated
+  // at max_tokens and which still has the partial content from that
+  // attempt. Continues the same document via prefill (the partial content
+  // as an assistant turn) instead of paying to regenerate it from scratch.
+  // Every other retry path (error retry, normal sequential generation) is
+  // completely unaffected — this only fires on this one specific combination.
+  const priorContent = String(out.content||'');
+  const isTruncationContinuation = out.stopReason==='max_tokens' && (out.manualRetryCount||0)>0 && !!priorContent.trim();
+  const messages = isTruncationContinuation
+    ? [
+        {role:'user', content: buildOutputPrompt(idx)+'\n\n'+buildCompletionRepairInstruction(out, out.validation, out.manualRetryCount)},
+        {role:'assistant', content: priorContent},
+      ]
+    : buildMessageHistory(idx);
   const systemPromptParts=buildSystemPrompt(exec.pillar,out);
   out.requestsDispatched++;
   exec.requestsDispatched++;
@@ -7212,7 +7227,11 @@ async function execApiMode(idx, signal){
   exec.responsesReceived++;
   out.responsesReceived++;
   out.apiCalls++;
-  out.content=text;
+  // On a truncation-continuation, the full document is the prior content
+  // plus the new chunk — validation/acceptance below must see the whole
+  // artefact, not just the newly-generated tail.
+  const fullContent = isTruncationContinuation ? (priorContent+'\n\n'+text) : text;
+  out.content=fullContent;
   out.stopReason=stopReason;
   out.usage=usage;
   out.lastUsage=usage;
@@ -7220,13 +7239,14 @@ async function execApiMode(idx, signal){
   out.generatedAt=new Date().toISOString();
   out.telemetry=(out.telemetry||[]);
   out.telemetry.push(Object.assign({},data._eaceTelemetry||{model,stopReason,usage},{actualCostUsd:reqCost}));
+  if(isTruncationContinuation) out.continuationCount=(out.continuationCount||0)+1;
 
   // Validation is advisory only. It never triggers another paid request.
-  const validation=validateGeneratedOutput(exec.pillar,out.code,text,{stopReason});
+  const validation=validateGeneratedOutput(exec.pillar,out.code,fullContent,{stopReason});
   out.validation=validation;
   out.wordCount=validation.wordCount;
   out.estimatedPages=validation.estimatedPages;
-  out.continuationCount=0;
+  if(!isTruncationContinuation) out.continuationCount=0;
 
   // Output-specific acceptance contract check — deliberately kept separate
   // from out.state (generation/execution completion, below) rather than
@@ -7236,7 +7256,7 @@ async function execApiMode(idx, signal){
   // "COMPLETE just because text was generated" problem this layer exists
   // to fix — see buildExecutiveDashboard / the KPI strip for how the two
   // are surfaced without contradicting each other.
-  out.acceptance = validateOutputAcceptance(exec.pillar, out.code, text, {
+  out.acceptance = validateOutputAcceptance(exec.pillar, out.code, fullContent, {
     inputSnapshot: getExecutionInputData(),
     priorTexts: exec.outputs.filter(o=>o.code!==out.code && o.content).map(o=>o.content),
   });
@@ -7258,7 +7278,10 @@ async function execApiMode(idx, signal){
   // sequence and never triggers a paid continuation or regeneration.
   out.state='complete';
   out.lastError='';
-  logAudit('run',`Output ${out.code} COMPLETE via one API call (${model}, ${validation.wordCount} words, stop_reason=${stopReason||'n/a'}, $${reqCost.toFixed(3)}).`,exec.pillar,st.data.sysName||'—');
+  logAudit('run',isTruncationContinuation
+    ? `Output ${out.code} continued after max_tokens truncation (attempt ${out.continuationCount}, ${model}, ${validation.wordCount} total words, stop_reason=${stopReason||'n/a'}, +$${reqCost.toFixed(3)}).`
+    : `Output ${out.code} COMPLETE via one API call (${model}, ${validation.wordCount} words, stop_reason=${stopReason||'n/a'}, $${reqCost.toFixed(3)}).`,
+    exec.pillar,st.data.sysName||'—');
   updateExecCostDisplay();
   renderExecList(); updateExecProgress(); checkpointExecution('output-committed-'+out.code);
 }
