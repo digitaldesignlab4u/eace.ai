@@ -3159,7 +3159,7 @@ const FIELD_SCHEMA = {
     example:'Yes — full audit logging', source:'sys'},
   logRetention:    {id:'logRetention',    label:'Log retention period',      type:'select',
     opts:['6 months','1 year','2 years','3 years','5 years','10 years','Indefinite','Unknown'],
-    help:'Duration for which logs are retained — minimum 6 months for high-risk AI per Art. 12(1).',
+    help:'Duration for which logs are retained — minimum 6 months for high-risk AI per Art. 19 (providers) / Art. 26(6) (deployers). Art. 12 only requires logging capability to exist, not a retention duration.',
     example:'3 years',                   source:'sys'},
   incidentResponse:{id:'incidentResponse',label:'Incident response process', type:'select',
     opts:['Yes — documented and tested','Yes — documented','Informal process','No','Unknown'],
@@ -3963,13 +3963,6 @@ const schema = Object.fromEntries(
   })
 );
 
-const SEED = [
-  {id:'sys_s1',name:'Recruitment scoring AI',pillar:'P2A',risk:'High-risk',status:'Audit-ready',docs:31,style:'regulator',ran:{P2A:Date.now()-864e5*3},step:0,data:{sysName:'Recruitment scoring AI',sector:['Employment / HR'],criticality:'HIGH'}},
-  {id:'sys_s2',name:'Customer churn predictor',pillar:'P1',risk:'Limited',status:'In progress',docs:14,style:'regulator',ran:{P1:Date.now()-864e5},step:2,data:{sysName:'Customer churn predictor',sector:['Finance / Banking / AML']}},
-  {id:'sys_s3',name:'Medical triage assistant',pillar:'P2B',risk:'High-risk',status:'Pending',docs:0,style:'regulator',ran:{},step:0,data:{sysName:'Medical triage assistant',sector:['Healthcare / MedTech']}},
-  {id:'sys_s4',name:'Invoice processing bot',pillar:'P4',risk:'Minimal',status:'Draft',docs:0,style:'regulator',ran:{},step:0,data:{sysName:'Invoice processing bot',sector:['Finance / Banking / AML']}},
-];
-
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 // aj(): safe replacement for JSON.stringify() when embedding a value inside a
 // double-quoted HTML attribute (onclick="...", onchange="...", onblur="...").
@@ -4013,7 +4006,11 @@ function sf(id,v){
   }, 120);
 }
 
-function loadSystems(){try{const r=localStorage.getItem(LS_KEY);if(r){const p=JSON.parse(r);st.systems=p.systems||SEED;st.activeId=p.activeId||(st.systems[0]&&st.systems[0].id);}else{st.systems=JSON.parse(JSON.stringify(SEED));st.activeId=st.systems[0]?.id;}}catch(e){st.systems=JSON.parse(JSON.stringify(SEED));st.activeId=st.systems[0]?.id;}}
+// A fresh install (no saved localStorage yet) starts with zero systems, not
+// fabricated placeholder entries — the empty-state UI ("No systems yet")
+// handles that case, and showing fake "Audit-ready"/"31 docs" data by
+// default would be indistinguishable from real regulatory status.
+function loadSystems(){try{const r=localStorage.getItem(LS_KEY);if(r){const p=JSON.parse(r);st.systems=p.systems||[];st.activeId=p.activeId||(st.systems[0]&&st.systems[0].id);}else{st.systems=[];st.activeId=null;}}catch(e){st.systems=[];st.activeId=null;}}
 // saveSystems replaced by session architecture
 
 function syncActive(){const sys=st.systems.find(s=>s.id===st.activeId);if(sys){sys.data=Object.assign({},st.data);sys.pillar=st.pillar;sys.step=st.step;sys.style=st.docStyle;sys.ran=st.ran;sys.name=st.data.sysName||sys.name;}return st.systems;}
@@ -5729,6 +5726,8 @@ function saveExecState(){
         telemetry:         o.telemetry||[],
         manualRetryCount:  o.manualRetryCount||0,
         interrupted:       !!o.interrupted,
+        acceptance:        o.acceptance||null,
+        truncated:         !!o.truncated,
       })),
       lastCheckpointReason: exec.lastCheckpointReason||'',
       lastCheckpointAt: exec.lastCheckpointAt||Date.now(),
@@ -5805,6 +5804,8 @@ async function exportPartialExecutionState(){
         acceptanceStatus: (o.acceptance&&o.acceptance.status)||'NOT_EVALUATED',
         contractId: (o.acceptance&&o.acceptance.contractId)||null,
         missingArtefacts: (o.acceptance&&o.acceptance.missingArtefacts)||[],
+        blockersTriggered: (o.acceptance&&o.acceptance.blockersTriggered)||[],
+        blockersUnverified: (o.acceptance&&o.acceptance.blockersUnverified)||[],
         generatedAt: o.generatedAt||null,
       });
     }
@@ -5889,6 +5890,8 @@ function runEngine(){
         manualRetryCount:  sv.manualRetryCount||0,
         interrupted:       !!sv.interrupted,
         lastUsage:         sv.usage||null,
+        acceptance:        sv.acceptance||null,
+        truncated:         !!sv.truncated,
       };
     });
     const firstUnfinished = exec.outputs.findIndex(o=>o.state!=='complete');
@@ -6066,6 +6069,7 @@ async function execRun(){
       if(banner) banner.style.display='flex';
       const txt=document.getElementById('exec-resume-txt');
       if(txt) txt.textContent=`${out.code} is the first unfinished output. Retry only this output from the saved checkpoint; completed outputs will not be regenerated.`;
+      showRawErrorPanel(out.rawError);
       updatePauseBtn(true);
       renderExecList();
       updateExecProgress();
@@ -6092,6 +6096,7 @@ async function execRun(){
       if(banner) banner.style.display='flex';
       const txt=document.getElementById('exec-resume-txt');
       if(txt) txt.textContent=`${out.code} stopped. Completed outputs are preserved. Retry only this output, then continue sequentially.`;
+      showRawErrorPanel(out.rawError);
       renderExecList(); updateExecProgress(); updateCheckpointButton(); saveExecState();
       return;
     }finally{
@@ -6336,7 +6341,10 @@ function computeSubstantiveOverlapRatio(text, priorTexts){
 //   evidenceFields:[...], machineReadableAnnex: string|null,
 //   visualComponent: string, approvalFields:[...],
 //   distinctivenessNote: string, prohibitedSubstitutes:[...],
-//   completionBlockers:[...] (regexes/keys checked by the validator),
+//   completionBlockers:[...] (free-text failure conditions; validateOutputAcceptance
+//     mechanically checks the table/matrix-required and duplication/restatement
+//     shapes and blocks on those, everything else surfaces as blockersUnverified
+//     for human review rather than being silently ignored or falsely passed),
 //   conditionalActivation: {condition, notApplicableReasonRequired:bool}|null,
 // }
 
@@ -6901,11 +6909,29 @@ function _signatureWords(label){
     .filter(w=>w.length>=4 && !_CONTRACT_STOPWORDS.has(w.toLowerCase()))
     .slice(0,8);
 }
+// Negation cues checked around a matched artefact mention — word-overlap
+// alone can't distinguish "JSON Schema is required but not provided" from
+// an actual JSON Schema being present, since both sentences contain the
+// same significant words.
+const _ARTEFACT_NEGATION_CUES = /\b(not provided|not included|not present|not attached|not available|not generated|not applicable here|is missing|are missing|is absent|lacks a|lacking a|excludes the|does not include|doesn't include|has not been (provided|included|generated|attached)|no such|without a|not yet (provided|available|generated))\b/i;
+
 function _artefactPresent(label, textLower){
   const words=_signatureWords(label);
   if(!words.length) return true;
   const hits=words.filter(w=>textLower.includes(w.toLowerCase()));
-  return (hits.length/words.length) >= 0.5;
+  if((hits.length/words.length) < 0.5) return false;
+  // Localize to the sentence(s) that actually contain the matched words, and
+  // only treat the artefact as absent if EVERY such mention is negated —
+  // a text that both claims omission somewhere AND affirmatively includes
+  // the artefact elsewhere still counts as present.
+  const sentences = textLower.split(/[.\n]/);
+  const candidateSentences = sentences.filter(s=>{
+    const sHits = words.filter(w=>s.includes(w.toLowerCase()));
+    return (sHits.length/words.length) >= 0.5;
+  });
+  if(!candidateSentences.length) return true;
+  const allNegated = candidateSentences.every(s=>_ARTEFACT_NEGATION_CUES.test(s));
+  return !allNegated;
 }
 
 // ── LAYERED VALIDATOR — output-specific acceptance layer ──
@@ -6981,6 +7007,33 @@ function validateOutputAcceptance(pillar, code, text, ctx){
   const overlapInfo = computeSubstantiveOverlapRatio(trimmed, ctx.priorTexts||[]);
   const overlapFlagged = overlapInfo.ratio > 0.35;
 
+  // completionBlockers were previously carried as contract metadata used
+  // ONLY to build the model-facing prompt (buildOutputAcceptanceInstruction)
+  // and never actually checked against the generated text. Most are
+  // bespoke per-output legal/domain conditions ("FRIA triggered without
+  // naming the Art. 27(1) deployer category") that cannot be safely
+  // machine-verified without fabricating false confidence — so those are
+  // surfaced honestly as advisory, for human review, rather than silently
+  // dropped or falsely claimed as passed. Two shapes recur often enough
+  // across contracts to check for real, mechanically, without guessing:
+  // (a) a required table/matrix that is structurally absent, and (b) a
+  // "duplicates/restates/identical to/re-uses ... unchanged" blocker,
+  // which the overlap check above already computes for real.
+  const HAS_MD_TABLE = /\|[^|\n]+\|[^|\n]+\|[^\n]*\n[ \t]*\|?[ \t]*:?-{2,}:?[ \t|:-]*\|/;
+  const DUPLICATION_BLOCKER_CUE = /\b(duplicat|restate|identical to|re-?states? .*verbatim|re-?uses? .* unchanged|unchanged)\b/i;
+  const blockersTriggered = [];
+  const blockersUnverified = [];
+  (contract.completionBlockers||[]).forEach(b=>{
+    const bLower = String(b||'').toLowerCase();
+    if(/\btable\b|\bmatrix\b/.test(bLower)){
+      if(!HAS_MD_TABLE.test(trimmed)) blockersTriggered.push(b);
+    } else if(DUPLICATION_BLOCKER_CUE.test(bLower)){
+      if(overlapFlagged) blockersTriggered.push(b);
+    } else {
+      blockersUnverified.push(b);
+    }
+  });
+
   const bodyLines = trimmed.split(/\n/).filter(l=>l.trim());
   const isBareOutline = /^#+\s*(table of contents|outline|overview)\s*$/im.test(trimmed) && bodyLines.length < 25;
 
@@ -7002,13 +7055,14 @@ function validateOutputAcceptance(pillar, code, text, ctx){
   // user-supplied input) is exactly the anti-hallucination failure this
   // contract system exists to catch - it blocks acceptance rather than
   // being advisory-only, matching every other structural check here.
-  const structurallyBlocked = missingArtefacts.length>0 || legalConstantViolations.length>0 || overlapFlagged || isBareOutline || decisionLayerMissing || unsupportedStatusClaims.length>0;
+  const structurallyBlocked = missingArtefacts.length>0 || legalConstantViolations.length>0 || overlapFlagged || isBareOutline || decisionLayerMissing || unsupportedStatusClaims.length>0 || blockersTriggered.length>0;
   const status = structurallyBlocked ? 'BLOCKED' : approvalFieldsPending.length>0 ? 'ACCEPTED_PENDING_APPROVAL' : 'ACCEPTED';
 
   return {
     status,
     contractId: contract.id,
     missingArtefacts, legalConstantViolations, unsupportedStatusClaims, approvalFieldsPending, decisionLayerMissing,
+    blockersTriggered, blockersUnverified,
     overlap:{ratio:overlapInfo.ratio, copiedLines:overlapInfo.copiedLines, totalLines:overlapInfo.totalLines, flagged:overlapFlagged},
     isBareOutline, notApplicable:false,
   };
@@ -7051,12 +7105,29 @@ const OUTPUT_TOKEN_BUDGETS = {
 // subdocument output are not billed the same ceiling by default. Capped to
 // a sane floor/ceiling regardless of the formula's result.
 function getTokenBudget(pillar, code){
-  // Stable execution profile inherited from the proven legacy engine.
-  // One fixed ceiling prevents output-specific budget inflation from turning
-  // a single artefact into a 16K-token request and triggering continuation.
-  return 8192;
+  // A flat 8192 for every output regardless of contract complexity wastes
+  // budget on a 1-2 section output and, more importantly, gives a large
+  // multi-table/multi-register output no more headroom than a trivial one.
+  // Scale the per-pillar baseline up toward the verified-safe ceiling
+  // (OUTPUT_TOKEN_BUDGET_DEFAULT) using the real section count the contract
+  // requires (getOutputSpec's mandatorySections, sourced from
+  // OUTPUT_ACCEPTANCE_CONTRACTS) - never exceeding that ceiling, since a
+  // higher max_tokens is not verified safe for every model/account this app
+  // can be pointed at and a rejected request is worse than a truncation the
+  // continuation/repair path (MAX_CONTINUATIONS below) already handles.
+  const pillarDefault = (OUTPUT_TOKEN_BUDGETS[pillar]&&OUTPUT_TOKEN_BUDGETS[pillar].default) || OUTPUT_TOKEN_BUDGET_DEFAULT;
+  const spec = (typeof getOutputSpec==='function') ? getOutputSpec(pillar, code) : null;
+  const sections = (spec && typeof spec.mandatorySections==='number') ? spec.mandatorySections : 0;
+  const scaled = pillarDefault + sections*350;
+  return Math.max(pillarDefault, Math.min(scaled, OUTPUT_TOKEN_BUDGET_DEFAULT));
 }
-const MAX_CONTINUATIONS = 1; // only one continuation, reserved for true truncation
+// Safety bound against a runaway loop (a misbehaving model that never
+// naturally finishes) - NOT a business decision that a truncated document is
+// an acceptable end state. See the automatic continuation loop in
+// execApiMode(): a max_tokens stop_reason is a transport-level limit of one
+// API call and is resolved automatically, without asking the user to click
+// retry, up to this many additional calls for the same output.
+const MAX_CONTINUATIONS = 6;
 
 function buildCompletionRepairInstruction(out, validation, attempt){
   const warnings=(validation&&validation.warnings)||[];
@@ -7160,8 +7231,9 @@ async function execApiMode(idx, signal){
   const configuredKey=getConfiguredApiKey();
   if(!configuredKey) throw new Error('No API key configured.');
 
-  const tokenBudget=8192;
+  const tokenBudget=getTokenBudget(exec.pillar,out.code);
   const runCap=MAX_REQUESTS_PER_RUN[exec.pillar]||Math.max(exec.outputs.length,30);
+  const limit=getRunCostLimit(exec.pillar);
   exec.actualCostUsd=exec.actualCostUsd||0;
   exec.responsesReceived=exec.responsesReceived||0;
   exec.requestsDispatched=exec.requestsDispatched||0;
@@ -7169,13 +7241,17 @@ async function execApiMode(idx, signal){
   out.requestsDispatched=out.requestsDispatched||0;
   out.apiCalls=out.apiCalls||0;
 
-  if(out.requestsDispatched>=1){
+  // Resuming an output that was interrupted (app closed/crashed) mid-way
+  // through its own automatic continuation loop below is legitimate and must
+  // not be blocked by the one-dispatch guard - only a genuinely finished
+  // (state==='complete') or freshly-erroring output is protected by it.
+  const resumingUnfinishedContinuation = out.state!=='complete' && out.stopReason==='max_tokens' && !!String(out.content||'').trim();
+  if(out.requestsDispatched>=1 && !resumingUnfinishedContinuation){
     throw new Error(`${out.code}: one automatic API dispatch is permitted per output. Use explicit manual retry if required.`);
   }
   if(exec.requestsDispatched>=runCap){
     throw new Error(`Execution stopped: ${runCap} request limit for ${exec.pillar} reached. Completed outputs were preserved.`);
   }
-  const limit=getRunCostLimit(exec.pillar);
   if((exec.actualCostUsd||0)>=limit){
     throw new Error(`Execution stopped before ${out.code}: $${limit.toFixed(2)} ${exec.pillar} actual-cost limit reached. Completed outputs were preserved.`);
   }
@@ -7185,129 +7261,155 @@ async function execApiMode(idx, signal){
   out.rawError=null;
   renderExecList(); updateExecProgress(); saveExecState();
 
-  // Continuation of a truncated document — narrow, human-authorised case
-  // only: the user explicitly clicked retry (manualRetryCount>0, set by
-  // execResume) on an output whose PRIOR attempt was confirmed truncated
-  // at max_tokens and which still has the partial content from that
-  // attempt. Continues the same document via prefill (the partial content
-  // as an assistant turn) instead of paying to regenerate it from scratch.
-  // Every other retry path (error retry, normal sequential generation) is
-  // completely unaffected — this only fires on this one specific combination.
-  const priorContent = String(out.content||'');
-  const isTruncationContinuation = out.stopReason==='max_tokens' && (out.manualRetryCount||0)>0 && !!priorContent.trim();
-  const messages = isTruncationContinuation
-    ? [
-        {role:'user', content: buildOutputPrompt(idx)+'\n\n'+buildCompletionRepairInstruction(out, out.validation, out.manualRetryCount)},
-        {role:'assistant', content: priorContent},
-      ]
-    : buildMessageHistory(idx);
   const systemPromptParts=buildSystemPrompt(exec.pillar,out);
-  out.requestsDispatched++;
-  exec.requestsDispatched++;
-  let data;
   // A dispatched-but-failed request (network blip, 429 rate limit, transient
   // 5xx/529 "overloaded") never produced billable content, so retrying it is
-  // not a second paid generation of the same output — only a genuinely
-  // completed/erroring generation is subject to the one-dispatch guard above.
-  // Without this, any transient Anthropic hiccup permanently stalled the run
-  // at whichever output happened to be in flight, requiring a manual
-  // "Continue from checkpoint" click for something that would have quietly
-  // succeeded a few seconds later.
+  // not a second paid generation of the same output.
   const MAX_TRANSIENT_RETRIES=3;
-  let lastErr=null;
-  for(let attempt=0; attempt<=MAX_TRANSIENT_RETRIES; attempt++){
-    try{
-      data=await callAnthropicForOutput(model,tokenBudget,systemPromptParts,messages,configuredKey,signal);
-      lastErr=null;
-      break;
-    }catch(err){
-      lastErr=err;
-      const canRetry=err && err.retryable && attempt<MAX_TRANSIENT_RETRIES;
-      if(!canRetry) break;
-      const waitMs=Math.min(err.retryAfterMs||(1000*Math.pow(2,attempt)), 20000);
-      out.lastError=`${out.code}: transient error (${err.message}). Auto-retrying (${attempt+1}/${MAX_TRANSIENT_RETRIES}) in ${(waitMs/1000).toFixed(1)}s…`;
-      renderExecList(); updateExecProgress();
-      await sleep(waitMs);
+
+  // max_tokens is a transport-level limit of ONE API call, not a content
+  // defect - the loop below keeps calling the API for THIS SAME output,
+  // prefilling the accumulated content each time (assistant-role turn),
+  // until the model finishes naturally or the MAX_CONTINUATIONS safety net
+  // is reached. This never requires the user to notice truncation and click
+  // retry, and the run sequence never advances to the next output while
+  // this one is still incomplete.
+  let accumulatedContent = resumingUnfinishedContinuation ? String(out.content||'') : '';
+  let continuationAttempt = resumingUnfinishedContinuation ? (out.continuationCount||0) : 0;
+  let stopReason = null;
+  let usage = null;
+  let lastReqCost = 0;
+
+  while(true){
+    const isContinuation = continuationAttempt>0;
+    const messages = isContinuation
+      ? [
+          {role:'user', content: buildOutputPrompt(idx)+'\n\n'+buildCompletionRepairInstruction(out, out.validation, continuationAttempt)},
+          {role:'assistant', content: accumulatedContent},
+        ]
+      : buildMessageHistory(idx);
+
+    out.requestsDispatched++;
+    exec.requestsDispatched++;
+    let data;
+    let lastErr=null;
+    for(let attempt=0; attempt<=MAX_TRANSIENT_RETRIES; attempt++){
+      try{
+        data=await callAnthropicForOutput(model,tokenBudget,systemPromptParts,messages,configuredKey,signal);
+        lastErr=null;
+        break;
+      }catch(err){
+        lastErr=err;
+        const canRetry=err && err.retryable && attempt<MAX_TRANSIENT_RETRIES;
+        if(!canRetry) break;
+        const waitMs=Math.min(err.retryAfterMs||(1000*Math.pow(2,attempt)), 20000);
+        out.lastError=`${out.code}: transient error (${err.message}). Auto-retrying (${attempt+1}/${MAX_TRANSIENT_RETRIES}) in ${(waitMs/1000).toFixed(1)}s…`;
+        renderExecList(); updateExecProgress();
+        await sleep(waitMs);
+      }
     }
-  }
-  if(lastErr){
-    out.state='error';
-    out.lastError=String(lastErr&&lastErr.message?lastErr.message:lastErr);
-    out.rawError=lastErr&&lastErr.raw?lastErr.raw:null;
+    if(lastErr){
+      out.state='error';
+      out.lastError=String(lastErr&&lastErr.message?lastErr.message:lastErr);
+      out.rawError=lastErr&&lastErr.raw?lastErr.raw:null;
+      saveExecState();
+      throw lastErr;
+    }
+
+    const text=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
+    if(!text && !isContinuation){
+      out.state='error';
+      out.lastError='Anthropic returned an empty text response for '+out.code+'.';
+      saveExecState();
+      throw new Error(out.lastError);
+    }
+
+    usage=data.usage||null;
+    stopReason=data.stop_reason||null;
+    const reqCost=calculateRequestCost(model,usage);
+    lastReqCost=reqCost;
+    exec.actualCostUsd += reqCost;
+    out.costUsd=(out.costUsd||0)+reqCost;
+    exec.responsesReceived++;
+    out.responsesReceived++;
+    out.apiCalls++;
+
+    accumulatedContent = isContinuation ? (accumulatedContent+'\n\n'+text) : text;
+    out.content=accumulatedContent;
+    out.stopReason=stopReason;
+    out.usage=usage;
+    out.lastUsage=usage;
+    out.model=model;
+    out.generatedAt=new Date().toISOString();
+    out.telemetry=(out.telemetry||[]);
+    out.telemetry.push(Object.assign({},data._eaceTelemetry||{model,stopReason,usage},{actualCostUsd:reqCost}));
+    if(isContinuation) out.continuationCount=continuationAttempt;
+
+    // Advisory validation, recomputed on the full accumulated document each
+    // pass so a subsequent continuation's repair instruction cites real gaps.
+    out.validation=validateGeneratedOutput(exec.pillar,out.code,accumulatedContent,{stopReason});
+    out.wordCount=out.validation.wordCount;
+    out.estimatedPages=out.validation.estimatedPages;
     saveExecState();
-    throw lastErr;
+    renderExecList(); updateExecProgress();
+
+    if(stopReason!=='max_tokens') break; // finished naturally
+    if(continuationAttempt>=MAX_CONTINUATIONS) break; // safety net exhausted
+    if(!text) break; // a continuation call returning nothing new is a stuck loop, not progress
+    // A continuation is a real paid request - re-check the same run-level
+    // caps the entry guards enforced above before firing another one.
+    if(exec.requestsDispatched>=runCap || (exec.actualCostUsd||0)>=limit) break;
+
+    continuationAttempt++;
+    await sleep(300);
   }
 
-  const text=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
-  if(!text){
+  if(!accumulatedContent.trim()){
     out.state='error';
     out.lastError='Anthropic returned an empty text response for '+out.code+'.';
     saveExecState();
     throw new Error(out.lastError);
   }
-
-  const usage=data.usage||null;
-  const stopReason=data.stop_reason||null;
-  const reqCost=calculateRequestCost(model,usage);
-  exec.actualCostUsd += reqCost;
-  out.costUsd=(out.costUsd||0)+reqCost;
-  exec.responsesReceived++;
-  out.responsesReceived++;
-  out.apiCalls++;
-  // On a truncation-continuation, the full document is the prior content
-  // plus the new chunk — validation/acceptance below must see the whole
-  // artefact, not just the newly-generated tail.
-  const fullContent = isTruncationContinuation ? (priorContent+'\n\n'+text) : text;
-  out.content=fullContent;
-  out.stopReason=stopReason;
-  out.usage=usage;
-  out.lastUsage=usage;
-  out.model=model;
-  out.generatedAt=new Date().toISOString();
-  out.telemetry=(out.telemetry||[]);
-  out.telemetry.push(Object.assign({},data._eaceTelemetry||{model,stopReason,usage},{actualCostUsd:reqCost}));
-  if(isTruncationContinuation) out.continuationCount=(out.continuationCount||0)+1;
-
-  // Validation is advisory only. It never triggers another paid request.
-  const validation=validateGeneratedOutput(exec.pillar,out.code,fullContent,{stopReason});
-  out.validation=validation;
-  out.wordCount=validation.wordCount;
-  out.estimatedPages=validation.estimatedPages;
-  if(!isTruncationContinuation) out.continuationCount=0;
+  if(continuationAttempt===0) out.continuationCount=0;
 
   // Output-specific acceptance contract check — deliberately kept separate
   // from out.state (generation/execution completion, below) rather than
-  // folded into it. out.state answers "did the API call finish and return
-  // text"; out.acceptance answers "does the artefact contain what its
-  // contract requires". Collapsing these into one flag was the exact
-  // "COMPLETE just because text was generated" problem this layer exists
-  // to fix — see buildExecutiveDashboard / the KPI strip for how the two
-  // are surfaced without contradicting each other.
-  out.acceptance = validateOutputAcceptance(exec.pillar, out.code, fullContent, {
+  // folded into it. out.state answers "did the API call(s) finish and
+  // return the full document"; out.acceptance answers "does the artefact
+  // contain what its contract requires". Collapsing these into one flag was
+  // the exact "COMPLETE just because text was generated" problem this layer
+  // exists to fix.
+  out.acceptance = validateOutputAcceptance(exec.pillar, out.code, accumulatedContent, {
     inputSnapshot: getExecutionInputData(),
     priorTexts: exec.outputs.filter(o=>o.code!==out.code && o.content).map(o=>o.content),
   });
-  // A response confirmed truncated at max_tokens is never a complete
-  // artefact regardless of what the structural checks above found - the
-  // document may be missing its final section entirely. This does NOT
-  // retrigger generation (out.state below is unchanged, so the run
-  // sequence still advances and no second paid request fires); it only
-  // stops the artefact from being reported as regulator-ready.
-  if(stopReason==='max_tokens' && out.acceptance.status!=='BLOCKED'){
+
+  // Still truncated after exhausting the automatic continuation safety net
+  // (MAX_CONTINUATIONS) is a real, honest gap in the document - but it is a
+  // length/orchestration limit, not a content or legal defect, so it is
+  // tracked as its own flag rather than silently reusing acceptance.status
+  // for a meaning it doesn't have anywhere else in this system. It still
+  // keeps the artefact out of "regulatory ready" via the BLOCKED bucket
+  // (the only bucket the dashboard/export treat as not-ready), clearly
+  // worded so it is never mistaken for a legal/content finding.
+  out.truncated = stopReason==='max_tokens';
+  if(out.truncated){
+    // Appended (and status forced to BLOCKED if it wasn't already) regardless
+    // of whether content-level checks separately blocked this artefact — a
+    // reviewer must see the truncation note even when the document also has
+    // unrelated content gaps, not have it silently dropped because some
+    // other check already set status to BLOCKED first.
     out.acceptance = Object.assign({}, out.acceptance, {
       status:'BLOCKED',
-      missingArtefacts:(out.acceptance.missingArtefacts||[]).concat(['Response truncated at max_tokens — the artefact may be missing content after the cut-off point; continuation/regeneration required before this is regulator-ready.']),
+      missingArtefacts:(out.acceptance.missingArtefacts||[]).concat([`Still truncated at max_tokens after ${continuationAttempt} automatic continuation attempt(s) — a length/orchestration limit, not a content or legal defect. Regenerate or manually continue this output.`]),
     });
   }
 
-  // Proven legacy behaviour: any successful non-empty response is complete.
-  // stop_reason is retained in telemetry for review, but it never blocks the
-  // sequence and never triggers a paid continuation or regeneration.
   out.state='complete';
-  out.lastError='';
-  logAudit('run',isTruncationContinuation
-    ? `Output ${out.code} continued after max_tokens truncation (attempt ${out.continuationCount}, ${model}, ${validation.wordCount} total words, stop_reason=${stopReason||'n/a'}, +$${reqCost.toFixed(3)}).`
-    : `Output ${out.code} COMPLETE via one API call (${model}, ${validation.wordCount} words, stop_reason=${stopReason||'n/a'}, $${reqCost.toFixed(3)}).`,
+  if(!out.truncated) out.lastError='';
+  logAudit('run', continuationAttempt>0
+    ? `Output ${out.code} completed after ${continuationAttempt} automatic continuation(s) (${model}, ${out.wordCount} total words, stop_reason=${stopReason||'n/a'}${out.truncated?', STILL TRUNCATED':''}, +$${lastReqCost.toFixed(3)}).`
+    : `Output ${out.code} COMPLETE via one API call (${model}, ${out.wordCount} words, stop_reason=${stopReason||'n/a'}, $${lastReqCost.toFixed(3)}).`,
     exec.pillar,st.data.sysName||'—');
   updateExecCostDisplay();
   renderExecList(); updateExecProgress(); checkpointExecution('output-committed-'+out.code);
@@ -7845,6 +7947,26 @@ function execPauseResume(){
     document.getElementById('exec-title').textContent='Generation paused';
     saveExecState();
     logAudit('run','Generation paused at output '+(exec.currentIdx+1),exec.pillar,st.data.sysName||'—');
+  }
+}
+
+// Shows/hides the raw technical error detail inside the checkpoint banner
+// (#exec-raw-error-panel, already in the HTML and styled, but this
+// function itself was missing entirely - every call to it, including the
+// very first line of execResume(), threw an uncaught ReferenceError and
+// silently aborted before anything else in the function ran. That is why
+// "Continue from checkpoint", "Retry ... from checkpoint" and "Retry
+// current output & continue" (which all call execResume) appeared to do
+// nothing: the click handler crashed on its first statement.
+function showRawErrorPanel(content){
+  const panel=document.getElementById('exec-raw-error-panel');
+  if(!panel) return;
+  if(content){
+    panel.textContent=typeof content==='string'?content:JSON.stringify(content,null,2);
+    panel.style.display='block';
+  }else{
+    panel.style.display='none';
+    panel.textContent='';
   }
 }
 
@@ -11876,6 +11998,13 @@ function buildExecutiveDashboard(sys, pillar){
   const docsBlocked     = docsWithContract.filter(o=>o.acceptance.status==='BLOCKED');
   const docsPendingApproval = docsWithContract.filter(o=>o.acceptance.status==='ACCEPTED_PENDING_APPROVAL');
   const docsAccepted    = docsWithContract.filter(o=>o.acceptance.status==='ACCEPTED');
+  // Contract conditions that describe bespoke legal/domain judgement (e.g.
+  // "FRIA triggered without naming the Art. 27(1) deployer category") are
+  // not safely machine-verifiable — rather than silently ignore them or
+  // falsely claim they passed, an ACCEPTED output that still carries them
+  // is surfaced here so a human reviewer sees exactly what was never
+  // actually checked by software.
+  const docsNeedingManualReview = docsWithContract.filter(o=>o.acceptance.status!=='BLOCKED' && (o.acceptance.blockersUnverified||[]).length>0);
   // Human approval status (Section 14, 4th axis): pending signatures are a
   // real open action, but a DIFFERENT kind of open action than a
   // structurally broken artefact — kept in its own bucket rather than
@@ -11925,7 +12054,7 @@ function buildExecutiveDashboard(sys, pillar){
       <div style="font-family:var(--font-mono),monospace;font-size:8.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--status-review);margin-bottom:6px;">Material completion actions open — generated but not yet acceptance-ready</div>
       ${docsBlocked.map(o=>{
         const a=o.acceptance||{};
-        const gaps=[].concat(a.missingArtefacts||[], a.legalConstantViolations||[], (a.overlap&&a.overlap.flagged)?['Excessive overlap with another output ('+Math.round(a.overlap.ratio*100)+'%)']:[], a.decisionLayerMissing?['Missing opening decision layer (result/why/next/legal basis/evidence/blockers/actions)']:[], a.isBareOutline?['Artefact is a bare outline/table of contents, not the substantive artefact']:[]);
+        const gaps=[].concat(a.missingArtefacts||[], a.legalConstantViolations||[], a.blockersTriggered||[], (a.overlap&&a.overlap.flagged)?['Excessive overlap with another output ('+Math.round(a.overlap.ratio*100)+'%)']:[], a.decisionLayerMissing?['Missing opening decision layer (result/why/next/legal basis/evidence/blockers/actions)']:[], a.isBareOutline?['Artefact is a bare outline/table of contents, not the substantive artefact']:[]);
         return `<div style="font-size:11.5px;color:var(--muted);margin-bottom:4px;"><b style="color:var(--ink);">${esc(o.code)}</b> — ${esc(gaps.slice(0,3).join('; ')||'acceptance check failed')}${gaps.length>3?' …':''}</div>`;
       }).join('')}
     </div>` : ''}
@@ -11933,6 +12062,11 @@ function buildExecutiveDashboard(sys, pillar){
     <div style="background:rgba(211,168,74,0.08);border:0.5px solid var(--status-progress);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:18px;">
       <div style="font-family:var(--font-mono),monospace;font-size:8.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--status-progress);margin-bottom:6px;">Human approval status — drafting complete, signature/approval field(s) not yet evidenced</div>
       ${docsPendingApproval.map(o=>`<div style="font-size:11.5px;color:var(--muted);margin-bottom:4px;"><b style="color:var(--ink);">${esc(o.code)}</b> — awaiting: ${esc((o.acceptance.approvalFieldsPending||[]).join('; '))}</div>`).join('')}
+    </div>` : ''}
+    ${docsNeedingManualReview.length ? `
+    <div style="background:rgba(120,120,140,0.08);border:0.5px solid var(--border-2);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:18px;">
+      <div style="font-family:var(--font-mono),monospace;font-size:8.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;">Requires manual verification — not machine-checkable</div>
+      ${docsNeedingManualReview.map(o=>`<div style="font-size:11.5px;color:var(--muted);margin-bottom:4px;"><b style="color:var(--ink);">${esc(o.code)}</b> — ${esc((o.acceptance.blockersUnverified||[]).slice(0,2).join('; '))}${(o.acceptance.blockersUnverified||[]).length>2?' …':''}</div>`).join('')}
     </div>` : ''}
     ${groupOrder.map(group=>`
     <div style="margin-bottom:14px;">
@@ -12127,7 +12261,7 @@ function buildFinalRegulatoryReview(sys, pillar, outputs){
     const refs=[...String(o.content||'').matchAll(/\b(?:O|P)[A-Z0-9-]{1,8}\b/g)].map(m=>m[0]);
     refs.forEach(ref=>{ if(!outputs.some(x=>x.code===ref)) crossRefs.push({from:o.code,ref}); });
   });
-  const blockedOutputs = outputs.filter(o=>o.acceptance && o.acceptance.status==='BLOCKED').map(o=>({code:o.code, gaps:(o.acceptance.missingArtefacts||[]).concat(o.acceptance.legalConstantViolations||[]).slice(0,3)}));
+  const blockedOutputs = outputs.filter(o=>o.acceptance && o.acceptance.status==='BLOCKED').map(o=>({code:o.code, gaps:(o.acceptance.missingArtefacts||[]).concat(o.acceptance.legalConstantViolations||[]).concat(o.acceptance.blockersTriggered||[]).slice(0,3)}));
   const pendingApprovalOutputs = outputs.filter(o=>o.acceptance && o.acceptance.status==='ACCEPTED_PENDING_APPROVAL').map(o=>o.code);
   const status = blockedOutputs.length ? 'MATERIAL COMPLETION ACTIONS OPEN'
     : pendingApprovalOutputs.length ? 'GENERATED — PENDING HUMAN APPROVAL'
@@ -12168,6 +12302,7 @@ function persistCompletedExecOutput(out){
       wordCount:out.wordCount||0, estimatedPages:out.estimatedPages||0, model:out.model||'',
       stopReason:out.stopReason||null, continuationCount:out.continuationCount||0,
       validation:out.validation||null, acceptance:out.acceptance||null, telemetry:out.telemetry||[],
+      truncated:!!out.truncated,
       ts:out.generatedAt||new Date().toISOString(),
       evidenceId:'EV-'+exec.pillar+'-'+out.code+'-'+Date.now()
     };
@@ -12477,7 +12612,7 @@ const EA_PROVIDERS = PROVIDER_REGISTRY
   });
 
 function openEngineActivation(){
-  ea.step=2; ea.provider='anthropic'; ea.creds=''; // Skip provider selection — single provider
+  ea.step=2; ea.provider='anthropic'; ea.creds=''; ea.credsError=''; // Skip provider selection — single provider
   let overlay=$id('engine-activation-overlay');
   if(!overlay){
     overlay=document.createElement('div');
@@ -12530,14 +12665,21 @@ function renderEAStep(){
     var prov2=EA_PROVIDERS.find(function(p){return p.id===ea.provider;})||{name:''};
     var credLabel=ea.provider==='azure'?'Endpoint URL & Key':'API Credentials';
     var credPh='sk-ant-api03-...';
+    var fileProtoWarning=(typeof location!=='undefined' && location.protocol==='file:')
+      ? '<div class="ea-file-proto-warning" style="background:rgba(224,112,112,0.08);border:0.5px solid rgba(224,112,112,0.4);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:14px;font-size:11.5px;line-height:1.55;color:var(--ink);">'
+        +'<b style="color:var(--red-bright);">This page is open as a local file</b> (the address bar shows <code>file://...</code>). Browsers block the secure connection to the AI provider from a local file regardless of the key entered here. Host this file (e.g. Vercel, Netlify, GitHub Pages) or serve it locally (e.g. run <code>python3 -m http.server</code> in its folder and open <code>http://localhost:8000</code>) and use that web address instead.'
+        +'</div>'
+      : '';
     body='<div class="ea-panel">'
+      +fileProtoWarning
       +'<div class="ea-panel-title">Credentials &mdash; '+esc(prov2.name)+'</div>'
       +'<div class="ea-panel-sub">Enter your '+esc(prov2.name)+' credentials. Held only for this browser session, never written to disk.</div>'
       +'<div class="ea-field"><label class="ea-field-label" for="ea-creds-input">'+esc(credLabel)+'</label>'
       +'<div class="byok-api-row">'
-      +'<input class="ea-field-input field-input" type="password" id="ea-creds-input" placeholder="'+esc(credPh)+'" autocomplete="off" value="'+esc(ea.creds)+'" oninput="ea.creds=this.value"/>'
-      +'<button type="button" class="ea-btn-primary" style="flex-shrink:0;white-space:nowrap;" onclick="eaNext()">Validate connection &rarr;</button>'
+      +'<input class="ea-field-input field-input" type="password" id="ea-creds-input" placeholder="'+esc(credPh)+'" autocomplete="off" value="'+esc(ea.creds)+'" oninput="ea.creds=this.value;eaClearCredsError();"/>'
+      +'<button type="button" class="ea-btn-primary" style="flex-shrink:0;white-space:nowrap;" onclick="eaNext()" '+(String(ea.creds||'').trim()?'':'disabled style="opacity:.4;cursor:default;"')+'>Validate connection &rarr;</button>'
       +'</div>'
+      +(ea.credsError?'<div class="ea-creds-error" id="ea-creds-error" style="color:var(--red-bright);font-size:11px;margin-top:8px;">'+esc(ea.credsError)+'</div>':'<div id="ea-creds-error"></div>')
       +'</div>'
       +'<div style="font-family:var(--font-mono),monospace;font-size:9px;color:var(--faint);margin-top:8px;">Session-only &mdash; never written to disk or exported</div>'
       +'</div>';
@@ -12586,15 +12728,19 @@ function renderEAStep(){
 }
 
 function eaSelectProvider(id){ ea.provider=id; renderEAStep(); }
-function eaNext(){ if(ea.step===1&&!ea.provider)return; ea.step++; renderEAStep(); }
+function eaClearCredsError(){ if(ea.credsError){ ea.credsError=''; const el=$id('ea-creds-error'); if(el) el.textContent=''; } }
+function eaNext(){
+  if(ea.step===1&&!ea.provider)return;
+  if(ea.step===2&&!String(ea.creds||'').trim())return; // "Validate connection" is also disabled in this state; this guards a stale/cached button.
+  ea.step++; renderEAStep();
+}
 function eaPrev(){ if(ea.step>1){ea.step--;renderEAStep();} }
 
-function runEAValidation(){
+async function runEAValidation(){
   const steps=[
     {id:'ea-val-1',row:null,           delay:0},
     {id:'ea-val-2',row:'ea-val-row-2', delay:800},
     {id:'ea-val-3',row:'ea-val-row-3', delay:1600},
-    {id:'ea-val-4',row:'ea-val-row-4', delay:2400},
   ];
   steps.forEach(function(step,idx){
     setTimeout(function(){
@@ -12603,15 +12749,58 @@ function runEAValidation(){
       var cur=$id(step.id);if(cur){cur.className='ea-val-icon checking';cur.textContent='\u21bb';}
     },step.delay);
   });
-  setTimeout(function(){
-    var last=$id('ea-val-4');if(last){last.className='ea-val-icon done';last.textContent='\u2713';}
-    if(ea.provider==='anthropic'&&ea.creds){setConfiguredApiKey(ea.creds);}
-    else if(ea.creds){setConfiguredApiKey(ea.creds);}
-    if(ea.provider){try{sessionStorage.setItem('eace_provider',ea.provider);}catch(e){}}
-    st.engineActive=true;
-    st.engineProvider=ea.provider;
-    setTimeout(function(){ea.step=4;renderEAStep();},600);
-  },3200);
+
+  // Real check, not a timer: "Checking credentials..." previously always
+  // succeeded regardless of whether the key actually worked, so a typo'd
+  // or empty key produced a false "Compliance Engine Operational" screen
+  // - the failure only surfaced later, confusingly, when a real
+  // generation request failed. This sends one minimal, near-zero-cost
+  // request through the same call path real generation uses.
+  const key=String(ea.creds||'').trim();
+  const minDisplayMs=new Promise(function(r){ setTimeout(r,1800); });
+
+  // A page opened as a local file (file://...) cannot make a cross-origin
+  // fetch to https://api.anthropic.com at all - Chromium blocks this
+  // unconditionally before the request leaves the browser, regardless of
+  // whether the key is valid. Detect this up front and say so plainly:
+  // "Connection failed, check your key" would be actively misleading here
+  // (no key would ever work) and send the user looking in the wrong place.
+  if(typeof location!=='undefined' && location.protocol==='file:'){
+    await minDisplayMs;
+    ea.step=2;
+    ea.credsError='This page was opened as a local file (file://...), so the browser blocks the secure connection to the AI provider regardless of the key. Open it via a real web address instead: host it (e.g. Vercel, Netlify, GitHub Pages) or run a local web server (e.g. "python3 -m http.server" in the folder, then open http://localhost:8000) and use that http(s):// address, not the downloaded file.';
+    renderEAStep();
+    return;
+  }
+
+  let ok=false, errMsg='';
+  try{
+    await Promise.all([
+      callAnthropicForOutput('claude-haiku-4-5', 1, '', [{role:'user',content:'ping'}], key, undefined),
+      minDisplayMs,
+    ]);
+    ok=true;
+  }catch(e){
+    await minDisplayMs;
+    ok=false;
+    errMsg=String(e&&e.message?e.message:e);
+  }
+
+  if(!ok){
+    ea.step=2;
+    ea.credsError='Connection failed: '+errMsg+' Check the key and try again.';
+    renderEAStep();
+    return;
+  }
+
+  const last4=$id('ea-val-row-4');if(last4)last4.style.opacity='1';
+  var last=$id('ea-val-4');if(last){last.className='ea-val-icon done';last.textContent='\u2713';}
+  const prev3=$id('ea-val-3');if(prev3){prev3.className='ea-val-icon done';prev3.textContent='\u2713';}
+  setConfiguredApiKey(key);
+  if(ea.provider){try{sessionStorage.setItem('eace_provider',ea.provider);}catch(e){}}
+  st.engineActive=true;
+  st.engineProvider=ea.provider;
+  setTimeout(function(){ea.step=4;renderEAStep();},400);
 }
 
 function eaComplete(){
