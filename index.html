@@ -356,6 +356,7 @@ a{color:var(--gold);text-decoration:none;}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
 .form-sub{font-size:11.5px;color:var(--faint);margin-bottom:7px;line-height:1.45;}
 .form-shared{font-family:'DM Mono','IBM Plex Mono',Consolas,monospace;font-size:9px;letter-spacing:0.06em;}
+.field-provenance{font-family:'DM Mono','IBM Plex Mono',Consolas,monospace;font-size:8px;letter-spacing:0.08em;text-transform:uppercase;margin-left:auto;opacity:0.75;flex-shrink:0;}
 .field-prefill-wrap{border:0.5px solid rgba(198,166,103,0.2);border-radius:var(--radius-sm);padding:10px 12px;background:rgba(198,166,103,0.03);}
 .form-shared-green{color:var(--green);}
 .form-shared-amber{color:var(--gold-2);}
@@ -372,13 +373,21 @@ a{color:var(--gold);text-decoration:none;}
 .toast-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
 .info-pop-val.legal{color:var(--gold-2);font-family:'DM Mono','IBM Plex Mono',Consolas,monospace;font-size:10px;}
 
-/* Field controls */
+/* Field controls — user-ENTERED text only. This is the one place the
+   spec's "user-entered text may be slightly smaller" rule applies; it
+   must never propagate to labels, nav, dashboards or generated output. */
 .ctrl-text,.ctrl-textarea,.ctrl-url,.ctrl-select{
-  display:block;width:100%;background:var(--input-bg);border:0.5px solid var(--border-2);
-  border-radius:var(--radius-sm);padding:12px 12px;font-size:18px;font-weight:500;color:var(--ink);
+  display:block;width:100%;background:rgba(255,255,255,0.025);border:1px solid var(--border-2);
+  border-radius:4px;padding:10px 12px;font-size:13px;font-weight:400;line-height:1.5;letter-spacing:0;color:var(--ink);
   transition:border-color .15s,background .15s,box-shadow .15s;
 }
-.ctrl-textarea{resize:vertical;min-height:80px;line-height:1.55;}
+.ctrl-textarea{resize:vertical;min-height:88px;max-height:180px;overflow-y:auto;}
+.ctrl-text:focus,.ctrl-textarea:focus,.ctrl-url:focus,.ctrl-select:focus{
+  outline:none;border-color:var(--gold);box-shadow:0 0 0 2px rgba(198,166,103,0.10);
+}
+.ctrl-text::placeholder,.ctrl-textarea::placeholder,.ctrl-url::placeholder{
+  font-size:12.5px;font-weight:400;font-style:normal;color:var(--faint);opacity:0.8;
+}
 .ctrl-select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%235a5850' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px;cursor:pointer;}
 .ctrl-select:focus{background-image:url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23C6A667' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E");}
 .ctrl-select option{background:var(--panel-2);color:var(--ink);}
@@ -4261,8 +4270,17 @@ function renderField(f){
     }
   }
 
+  // Permanently visible provenance state, distinct from the shared-field
+  // badge above: this answers "where did this value come from" for EVERY
+  // field, not only shared ones. INHERITED covers the same prefilled-from-
+  // another-engine case sharedBadge already names in more detail above.
+  const hasValue = f.type==='check' ? undefined : !(val===undefined||val===null||val===''||(Array.isArray(val)&&val.length===0));
+  const provenanceState = hasValue===undefined ? null : prefilled ? 'INHERITED' : hasValue ? 'USER INPUT' : 'NOT PROVIDED';
+  const provenanceColor = prefilled ? 'var(--green)' : hasValue ? 'var(--muted)' : 'var(--faint)';
+  const provenanceBadge = provenanceState ? `<span class="field-provenance" style="color:${provenanceColor};">${provenanceState}</span>` : '';
+
   const infoBtn=`<button class="info-btn" onclick="toggleInfo(event,'${f.id}','${esc(f.label)}','${esc(f.legal||'')}','${esc(f.plain||'')}')">i</button>`;
-  const labelHtml=`<div class="form-label-row"><span class="form-label${f.required?' required':''}">${esc(f.label)}${f.required?'<span class="sr-only"> (required)</span>':''}</span>${infoBtn}</div>${sharedBadge?`<div style="margin-bottom:4px;">${sharedBadge}</div>`:''}${f.sub?`<div class="form-sub">${esc(f.sub)}</div>`:''}`;
+  const labelHtml=`<div class="form-label-row"><span class="form-label${f.required?' required':''}">${esc(f.label)}${f.required?'<span class="sr-only"> (required)</span>':''}</span>${infoBtn}${provenanceBadge}</div>${sharedBadge?`<div style="margin-bottom:4px;">${sharedBadge}</div>`:''}${f.sub?`<div class="form-sub">${esc(f.sub)}</div>`:''}`;
 
   // Prefilled highlight: subtle gold border on container
   const prefilledStyle=prefilled?'border:0.5px solid rgba(198,166,103,0.2);border-radius:var(--radius-sm);padding:10px 12px;background:rgba(198,166,103,0.03);':'';
